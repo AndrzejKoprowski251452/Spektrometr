@@ -25,6 +25,10 @@ class MotionDetector:
         self.prev_frame = gray
 
         mean_flow = np.mean(flow, axis=(0, 1))
+        magnitude = np.linalg.norm(mean_flow)
+
+        if magnitude < 0.1:
+            return "No significant movement", frame
         if abs(mean_flow[0]) > abs(mean_flow[1]):
             direction = 'Right' if mean_flow[0] > 0 else 'Left'
         else:
@@ -34,7 +38,6 @@ class MotionDetector:
 
     def release(self):
         self.cap.release()
-
 
 class App(Tk):
     def __init__(self):
@@ -53,6 +56,10 @@ class App(Tk):
     def create_widgets(self):
         self.start_button = Button(self, text="Start Camera", command=self.start_camera)
         self.start_button.grid(row=0,column=0)
+        
+        Label(self, text="Detected Movement Direction:").grid(row=1,column=1)
+        self.direction_label = Label(self, textvariable=self.direction)
+        self.direction_label.grid(row=1,column=2)
 
     def start_camera(self):
         self.detector = MotionDetector(video_source=0)
