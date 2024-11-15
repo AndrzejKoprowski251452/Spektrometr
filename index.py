@@ -2,6 +2,7 @@ from tkinter import *
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
+import pyserial
 
 class MotionDetector:
     def __init__(self, video_source=0):
@@ -51,15 +52,27 @@ class App(Tk):
         self.frame_label = Label(self)
         self.frame_label.grid(row=1,column=0)
         
+        self.left = Button(self,text='←',width=2,height=1)
+        self.left.grid(row=3,column=2)
+        self.right = Button(self,text='→',width=2,height=1)
+        self.right.grid(row=3,column=4)
+        self.up = Button(self,text='↑',width=2,height=1)
+        self.up.grid(row=2,column=3)
+        self.down = Button(self,text='↓',width=2,height=1)
+        self.down.grid(row=4,column=3)
+        
+        self.x = 0
+        self.y = 0
+        self.z = 0
+        
         self.create_widgets()
 
     def create_widgets(self):
-        self.start_button = Button(self, text="Start Camera", command=self.start_camera)
-        self.start_button.grid(row=0,column=0)
+        self.start_camera()
         
         Label(self, text="Detected Movement Direction:").grid(row=1,column=1)
         self.direction_label = Label(self, textvariable=self.direction)
-        self.direction_label.grid(row=1,column=2)
+        self.direction_label.grid(row=1,column=5)
 
     def start_camera(self):
         self.detector = MotionDetector(video_source=0)
