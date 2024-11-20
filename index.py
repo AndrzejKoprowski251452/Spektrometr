@@ -2,11 +2,10 @@ from tkinter import *
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
-import pyserial
 
 class MotionDetector:
-    def __init__(self, video_source=0):
-        self.cap = cv2.VideoCapture(video_source)
+    def __init__(self, video_source=1):
+        self.cap = cv2.VideoCapture(video_source, cv2.CAP_DSHOW)
         self.prev_frame = None
 
     def detect_movement_direction(self):
@@ -75,7 +74,7 @@ class App(Tk):
         self.direction_label.grid(row=1,column=5)
 
     def start_camera(self):
-        self.detector = MotionDetector(video_source=0)
+        self.detector = MotionDetector()
         self.update_video_feed()
 
     def update_video_feed(self):
