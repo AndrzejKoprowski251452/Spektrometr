@@ -1,4 +1,5 @@
 from tkinter import *
+from pixelinkWrapper import*
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
@@ -46,30 +47,38 @@ class MotionDetector:
 class App(Tk):
     def __init__(self, *args, **kwargs):
         Tk.__init__(self, *args, **kwargs)
-        self.geometry("1200x800")
         self.state("zoomed")
+        self.configure(bg='#242424')
         
-        self.container = Frame(self)
-        self.container.grid()
+        self.c1 = LabelFrame(self,text='Camera',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c2 = LabelFrame(self,text='Controls',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c3 = LabelFrame(self,text='Spectrometr View',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c4 = LabelFrame(self,text='Specterum',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        self.c3.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.c4.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        self.update_sizes()
+        self.bind("<Configure>", lambda event: self.update_sizes())
         
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
-        self.frame_label = Label(self)
+        self.frame_label = Label(self.c1)
         self.frame_label.place(x=0,y=0)
         
-        self.left = Button(self,text='←',width=2,height=1,command=lambda :self.move('l'))
-        self.left.place(x=1000,y=100)
-        self.right = Button(self,text='→',width=2,height=1,command=lambda :self.move('r'))
-        self.right.place(x=1050,y=100)
-        self.up = Button(self,text='↑',width=2,height=1,command=lambda :self.move('u'))
-        self.up.place(x=1025,y=75)
-        self.down = Button(self,text='↓',width=2,height=1,command=lambda :self.move('d'))
-        self.down.place(x=1025,y=125)
-        self.origin = Button(self,text='o',width=2,height=1,command=lambda:self.move('o'))
-        self.origin.place(x=1025,y=100)
-        self.v = Label(self)
-        self.v.place(x=1025,y=150)
+        self.left = Button(self.c2,text='←',width=2,height=1,command=lambda :self.move('l'))
+        self.left.place(x=100,y=100)
+        self.right = Button(self.c2,text='→',width=2,height=1,command=lambda :self.move('r'))
+        self.right.place(x=150,y=100)
+        self.up = Button(self.c2,text='↑',width=2,height=1,command=lambda :self.move('u'))
+        self.up.place(x=125,y=75)
+        self.down = Button(self.c2,text='↓',width=2,height=1,command=lambda :self.move('d'))
+        self.down.place(x=125,y=125)
+        self.origin = Button(self.c2,text='o',width=2,height=1,command=lambda:self.move('o'))
+        self.origin.place(x=125,y=100)
+        self.v = Label(self.c2)
+        self.v.place(x=125,y=150)
         
         self.connected = False
         
@@ -85,10 +94,30 @@ class App(Tk):
                 s.timeout=1
                 s.rtscts=True
                 self.ports.append(s)
+            self.ports[0].write('list-sensors'.encode())
+            print(self.ports[0].readlines())
         else:
             self.connected = False
         
         self.create_widgets()
+        
+    def update_sizes(self):
+        root_width = self.winfo_width()
+        root_height = self.winfo_height()
+
+        frame_width = root_width // 2 - 20
+        frame_height = root_height // 2 - 20
+
+        self.c1.config(width=frame_width, height=frame_height)
+        self.c2.config(width=frame_width, height=frame_height)
+        self.c3.config(width=frame_width, height=frame_height)
+        self.c4.config(width=frame_width, height=frame_height)
+        
+        self.c1.grid_propagate(False)
+        self.c2.grid_propagate(False)
+        self.c3.grid_propagate(False)
+        self.c4.grid_propagate(False)
+
         
     def move(self,dir):
         if self.connected:
@@ -120,9 +149,9 @@ class App(Tk):
     def create_widgets(self):
         self.start_camera()
         
-        Label(self, text="Detected Movement Direction:").grid(row=1,column=1)
-        self.direction_label = Label(self, textvariable=self.direction)
-        self.direction_label.grid(row=1,column=5)
+        Label(self.c1, text="Detected Movement Direction:").grid(row=0,column=0)
+        self.direction_label = Label(self.c1, textvariable=self.direction)
+        self.direction_label.grid(row=0,column=1)
 
     def start_camera(self):
         self.detector = MotionDetector()
@@ -149,6 +178,7 @@ class Options(Toplevel):
     def __init__(self, parent, controller):
         Toplevel.__init__(self, parent)
         self.geometry('500x400')
+        self.configure(bg='#242424')
         self.controller = controller
         x_frame = LabelFrame(self, text="X-Axis Controls")
         x_frame.place(x=10, y=10, width=220, height=120)
