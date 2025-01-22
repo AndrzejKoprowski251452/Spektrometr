@@ -5,9 +5,6 @@ from PIL import Image, ImageTk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import Normalize
 from ctypes import*
-import ctypes.wintypes
-import threading
-import win32api, win32con
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -56,8 +53,7 @@ class MotionDetector:
 class App(Tk):
     def __init__(self, *args, **kwargs):
         Tk.__init__(self, *args, **kwargs)
-        self.state('zoomed')
-        #self.geometry(f'{self.winfo_width}x{self.winfo_height}')
+        self.geometry('1920x1080')
         self.configure(bg='#242424')
         
         self.c1 = LabelFrame(self,text='Camera',bg='#242424',highlightbackground='#ffffff',fg='white')
@@ -123,7 +119,9 @@ class App(Tk):
         self.v = Label(self.c2)
         self.v.place(x=50,y=100)
         
+        self.image = None        
         self.connected = False
+        self.calibrated = False
         
         self.ports = []
         if len(list(serial.tools.list_ports.comports())) != 0 and False:
@@ -146,7 +144,6 @@ class App(Tk):
         self.update_sizes()
         
     def update_sizes(self):
-        self.state('zoomed')
         root_width = self.winfo_width()
         root_height = self.winfo_height()
 
@@ -172,22 +169,31 @@ class App(Tk):
         canvas_height = self.button_frame.winfo_height()
         self.canvas.itemconfig(self.canvas.create_window((0, 0), window=self.button_frame, anchor="nw"), width=canvas_width, height=canvas_height)
         
-    def move(self,dir):
+    def sequence(self,st):
+        steps = st.split(',')
+        for s in steps:
+            s = s.split(':')
+            self.move(s[0],s[1])
+        
+    def move(self,dir,step=100):
+        self.measurements.append(1)
+        self.draw_measurements()
+        self.update_canvas()
         if self.connected:
             if dir == 'r':
-                self.ports[0].write((f"M:1+P{100}\r\n").encode())
+                self.ports[0].write((f"M:1+P{step}\r\n").encode())
                 time.sleep(1)
                 self.ports[0].write('G:\r\n'.encode())
             elif dir == 'l':
-                self.ports[0].write((f"M:1-P{-100}\r\n").encode())
+                self.ports[0].write((f"M:1-P{-step}\r\n").encode())
                 time.sleep(1)
                 self.ports[0].write('G:\r\n'.encode())
             elif dir == 'u':
-                self.ports[1].write((f"M:1+P{100}\r\n").encode())
+                self.ports[1].write((f"M:1+P{step}\r\n").encode())
                 time.sleep(1)
                 self.ports[1].write('G:\r\n'.encode())
             elif dir == 'd':
-                self.ports[1].write((f"M:1-P{-100}\r\n").encode())
+                self.ports[1].write((f"M:1-P{-step}\r\n").encode())
                 time.sleep(1)
                 self.ports[1].write('G:\r\n'.encode())
             elif dir == 'o':
@@ -200,15 +206,14 @@ class App(Tk):
             self.v.config(text=f'x:{x},y:{y}')
 
     def create_widgets(self):
-        #self.start_camera()
+        self.start_camera()
         self.start_spectrometr()
         self.spectrum()
-        self.update_sizes()
-        self.update()
         
         Label(self.c1, text="Detected Movement Direction:").grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction)
         self.direction_label.grid(row=0,column=1)
+        self.state('zoomed')
         
     def custom_scroll(self):
         style = ttk.Style()
@@ -235,22 +240,20 @@ class App(Tk):
         )
 
     def start_camera(self):
-        self.detector = MotionDetector()
+        if not self.calibrated:
+            self.detector = MotionDetector()
+        else:
+            self.detector = None
         self.update_video_feed()
         
     def start_spectrometr(self):
-        # Just going to declare a very large (NumPy 2D array)buffer here.
         frame = np.zeros([1088,2048], dtype=np.uint8)
-
-        # Initialize any camera
         ret = PxLApi.initialize(0)
         if not(PxLApi.apiSuccess(ret[0])):
             print("Error: Unable to initialize a camera! rc = %i" % ret[0])
             return 1
 
         hCamera = ret[1]
-
-        # Start the stream
         ret = PxLApi.setStreamState(hCamera, PxLApi.StreamState.START)
 
         if PxLApi.apiSuccess(ret[0]):
@@ -270,23 +273,17 @@ class App(Tk):
         return 0
     
     def get_next_frame(self,hCamera, frame, maxNumberOfTries):
-
         ret = (PxLApi.ReturnCode.ApiUnknownError,)
-
         for i in range(maxNumberOfTries):
             ret = PxLApi.getNextNumPyFrame(hCamera, frame)
             if PxLApi.apiSuccess(ret[0]):
                 return ret
             else:
-                # If the streaming is turned off, or worse yet -- is gone?
-                # If so, no sense in continuing.
                 if PxLApi.ReturnCode.ApiStreamStopped == ret[0] or \
                     PxLApi.ReturnCode.ApiNoCameraAvailableError == ret[0]:
                     return ret
                 else:
                     print("    Hmmm... getNextFrame returned %i" % ret[0])
-
-        # Ran out of tries, so return whatever the last error was.
         return ret
 
     def update_video_feed(self):
@@ -295,8 +292,8 @@ class App(Tk):
 
             if frame is not None:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(rgb_frame)
-                image_tk = ImageTk.PhotoImage(image=image)
+                self.image = Image.fromarray(rgb_frame)
+                image_tk = ImageTk.PhotoImage(image=self.image)
 
                 self.frame_label.configure(image=image_tk)
                 self.frame_label.image = image_tk
@@ -310,7 +307,12 @@ class App(Tk):
     def hotmap(self,i,n):
         t = Toplevel()
         t.title(f'{i}')
-        data = np.random.rand(100, 100)
+        x = np.arange(0,self.image.width, 1)
+        y = np.arange(0,self.image.height, 1)
+        X, Y = np.meshgrid(x, y)
+        Z1 = np.cos(X)
+        Z2 = np.sin(Y)
+        data = (Z1 - Z2) * 2
         fig, ax = plt.subplots(figsize=(5, 5),facecolor='#242424')
         norm = Normalize(vmin=np.min(data), vmax=np.max(data))
         cax = ax.imshow(data, cmap='hot', norm=norm)
@@ -321,16 +323,16 @@ class App(Tk):
         cbar = fig.colorbar(cax, ax=ax, orientation='vertical')
         cbar.set_ticks(cbar.get_ticks())
         cbar.ax.tick_params(labelcolor='white')
-        img = Image.open('1.png')
-        img = img.resize((data.shape[1], data.shape[0]))
+        img = self.image
+        #img = img.resize((data.shape[1], data.shape[0]))
         ax.imshow(img, alpha=0.5)
         canvas = FigureCanvasTkAgg(fig, master=t)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
     def spectrum(self):
-        fig, ax = plt.subplots(facecolor='#242424')
+        fig, ax = plt.subplots(figsize=(5, 5),facecolor='#242424')
         ax.set_facecolor('#242424')
-        x = np.linspace(-10, 10, 10)
+        x = np.linspace(-10, 10, 100)
         y = np.exp(-x**2)
         ax.plot(x,y,color='darkgreen')
         ax.grid()
@@ -338,7 +340,8 @@ class App(Tk):
         ax.tick_params(axis='y', colors='white')
         canvas = FigureCanvasTkAgg(fig, master=self.c4)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=False)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        plt.tight_layout()
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
             b = Button(self.button_frame,text=f'{i}',command=lambda: self.hotmap(i,n),width=2,height=1)
