@@ -95,7 +95,7 @@ class App(Tk):
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
-        self.measurements = range(100)
+        self.measurements = range(10)
         self.data = range(100)
         self.speedX = 1
         self.speedY = 1
@@ -107,6 +107,8 @@ class App(Tk):
         
         self.frame_label = Label(self.c1)
         self.frame_label.place(x=0,y=0)
+        self.spectrometr_image = Label(self.c3,text='No camera detected')
+        self.spectrometr_image.place(x=0,y=0)
         
         self.left = Button(self.c2,text='←',width=2,height=1,command=lambda :self.move('l'))
         self.left.place(x=25,y=50)
@@ -124,7 +126,7 @@ class App(Tk):
         self.connected = False
         
         self.ports = []
-        if len(list(serial.tools.list_ports.comports())) != 0:
+        if len(list(serial.tools.list_ports.comports())) != 0 and False:
             self.connected = True
             for i in list(serial.tools.list_ports.comports()):
                 s = serial.Serial(str(i)[:4])
@@ -198,7 +200,7 @@ class App(Tk):
             self.v.config(text=f'x:{x},y:{y}')
 
     def create_widgets(self):
-        self.start_camera()
+        #self.start_camera()
         self.start_spectrometr()
         self.spectrum()
         self.update_sizes()
@@ -237,84 +239,56 @@ class App(Tk):
         self.update_video_feed()
         
     def start_spectrometr(self):
-        global hCamera
-        global topHwnd
+        # Just going to declare a very large (NumPy 2D array)buffer here.
+        frame = np.zeros([1088,2048], dtype=np.uint8)
+
+        # Initialize any camera
         ret = PxLApi.initialize(0)
+        if not(PxLApi.apiSuccess(ret[0])):
+            print("Error: Unable to initialize a camera! rc = %i" % ret[0])
+            return 1
+
+        hCamera = ret[1]
+
+        # Start the stream
+        ret = PxLApi.setStreamState(hCamera, PxLApi.StreamState.START)
+
         if PxLApi.apiSuccess(ret[0]):
-            hCamera = ret[1]
+            for i in range(1):            
+                ret = self.get_next_frame(hCamera, frame, 5)
+                print(frame.size)
+                image = Image.fromarray(frame)
+                image_tk = ImageTk.PhotoImage(image=image)
+                self.spectrometr_image.configure(image=image_tk)
+                self.spectrometr_image.image = image_tk
 
-            # Just use all of the camers's current settings.
-            # Start the stream
-            ret = PxLApi.setStreamState(hCamera, PxLApi.StreamState.START)
+        PxLApi.setStreamState(hCamera, PxLApi.StreamState.STOP)
+        assert PxLApi.apiSuccess(ret[0]), "setStreamState with StreamState.STOP failed"
+
+        PxLApi.uninitialize(hCamera)
+        assert PxLApi.apiSuccess(ret[0]), "uninitialize failed"
+        return 0
+    
+    def get_next_frame(self,hCamera, frame, maxNumberOfTries):
+
+        ret = (PxLApi.ReturnCode.ApiUnknownError,)
+
+        for i in range(maxNumberOfTries):
+            ret = PxLApi.getNextNumPyFrame(hCamera, frame)
             if PxLApi.apiSuccess(ret[0]):
+                return ret
+            else:
+                # If the streaming is turned off, or worse yet -- is gone?
+                # If so, no sense in continuing.
+                if PxLApi.ReturnCode.ApiStreamStopped == ret[0] or \
+                    PxLApi.ReturnCode.ApiNoCameraAvailableError == ret[0]:
+                    return ret
+                else:
+                    print("    Hmmm... getNextFrame returned %i" % ret[0])
 
-                # Step 3
-                #      Start the preview / message pump, as well as the TkInter window resize handler
-                topHwnd =  int(self.c3.frame(),0)
+        # Ran out of tries, so return whatever the last error was.
+        return ret
 
-                self.start_preview()
-                self.bind('<Configure>', self.winResizeHandler)
-                
-                # Step 4
-                #      Call the start the UI -- it will only return on Window exit
-                self.mainloop()
-
-                # Step 5
-                #      The user has quit the appliation, shut down the preview and stream
-                previewState = PxLApi.PreviewState.STOP
-
-                # Give preview a bit of time to stop
-                time.sleep(0.05)
-                
-                PxLApi.setStreamState(hCamera, PxLApi.StreamState.STOP) 
-
-            PxLApi.uninitialize(hCamera)
-        else:
-            Label(self.c3,text="No Camera Detected").grid(row=0,column=0,sticky='news')
-    def winResizeHandler(self,event):
-        global hCamera
-        global topHwnd
-        PxLApi.setPreviewSettings(hCamera, "", PxLApi.WindowsPreview.WS_VISIBLE | PxLApi.WindowsPreview.WS_CHILD , 0, 0, event.width, event.height, self.topHwnd)
-
-    def start_preview(self):
-        global previewState
-        previewState = PxLApi.PreviewState.START
-        previewThread = self.create_new_preview_thread()    
-        previewThread.start()
-        
-    def create_new_preview_thread(self):
-        return threading.Thread(target=self.control_preview_thread, args=(), daemon=True)
-    
-    def control_preview_thread(self):
-        global hCamera
-        global topHwnd
-        user32 = windll.user32
-        msg = ctypes.wintypes.MSG()
-        pMsg = ctypes.byref(msg)
-        
-        # Create an arror cursor (see below)
-        defaultCursor = win32api.LoadCursor(0,win32con.IDC_ARROW)
-        
-        # Get the current dimensions
-        width = self.c3.winfo_width()
-        height = self.c3.winfo_height()
-        ret = PxLApi.setPreviewSettings(hCamera, "", PxLApi.WindowsPreview.WS_VISIBLE | PxLApi.WindowsPreview.WS_CHILD , 
-                                        0, 0, width, height, topHwnd)
-
-        # Start the preview (NOTE: camera must be streaming).  Keep looping until the previewState is STOPed
-        ret = PxLApi.setPreviewState(hCamera, PxLApi.PreviewState.START)
-        while (PxLApi.PreviewState.START == previewState and PxLApi.apiSuccess(ret[0])):
-            if user32.PeekMessageW(pMsg, 0, 0, 0, 1) != 0:
-                # All messages are simpy forwarded onto to other Win32 event handlers.  However, we do
-                # set the cursor just to ensure that parent windows resize cursors do not persist within
-                # the preview window
-                win32api.SetCursor(defaultCursor)
-                user32.TranslateMessage(pMsg)
-                user32.DispatchMessageW(pMsg)
-    
-        # User has exited -- Stop the preview
-        ret = PxLApi.setPreviewState(hCamera, PxLApi.PreviewState.STOP)
-        assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
     def update_video_feed(self):
         if self.detector:
             direction, frame = self.detector.detect_movement_direction()
@@ -356,7 +330,7 @@ class App(Tk):
     def spectrum(self):
         fig, ax = plt.subplots(facecolor='#242424')
         ax.set_facecolor('#242424')
-        x = np.linspace(-10, 10, 100)
+        x = np.linspace(-10, 10, 10)
         y = np.exp(-x**2)
         ax.plot(x,y,color='darkgreen')
         ax.grid()

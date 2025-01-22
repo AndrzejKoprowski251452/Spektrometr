@@ -7,10 +7,12 @@ embedded within a Tkinter window
 from pixelinkWrapper import*
 from ctypes import*
 import ctypes.wintypes
-import tkinter as Tk
 import threading
-import time
 import win32api, win32con
+import tkinter as Tk
+import time
+from PIL import Image
+
 
 """
 Preview control thread -- starts and stops the preview, as well as handles the Windows Dispatch
@@ -106,6 +108,7 @@ def main():
 
           # Step 3
           #      Start the preview / message pump, as well as the TkInter window resize handler
+          
           topHwnd =  int(topWindow.frame(),0)
 
           start_preview()
