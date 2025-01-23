@@ -80,6 +80,8 @@ class App(Tk):
 
         self.close_button.bind('<Enter>',lambda e:self.changex_on_hovering())
         self.close_button.bind('<Leave>',lambda e:self.returnx_to_normalstate())
+        self.minimize_button.bind('<Enter>',lambda e:self.change__on_hovering())
+        self.minimize_button.bind('<Leave>',lambda e:self.return__to_normalstate())
 
         self.bind("<Expose>",lambda e:self.deminimize())
         self.after(10, lambda: self.set_appwindow())
@@ -196,6 +198,12 @@ class App(Tk):
         
     def returnx_to_normalstate(self):
         self.close_button['bg']=self.RGRAY
+        
+    def change__on_hovering(self):
+        self.minimize_button['bg']='gray'
+        
+    def return__to_normalstate(self):
+        self.minimize_button['bg']=self.RGRAY
         
         
     def update_sizes(self):
@@ -482,9 +490,9 @@ def move_to_position(x, y):
 if __name__ == "__main__":
     app = App()
     
-    #menu = Menu(app.window, background='#242424', fg='#242424')
-    #fileMenu = Menu(menu,tearoff=0, background='#424242', foreground='black')
-    #fileMenu.add_command(label="Options", command=lambda:Options(app,app))
-    #app.config(menu=menu)
-    #menu.add_cascade(label="File", menu=fileMenu)
+    # menu = Menu(app.title_bar, background='#242424', fg='#242424')
+    # fileMenu = Menu(menu,tearoff=0, background='#424242', foreground='black')
+    # fileMenu.add_command(label="Options", command=lambda:Options(app,app))
+    # app.config(menu=menu)
+    # menu.add_cascade(label="File", menu=fileMenu)
     app.mainloop()
