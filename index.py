@@ -53,71 +53,90 @@ class MotionDetector:
 class App(Tk):
     def __init__(self, *args, **kwargs):
         Tk.__init__(self, *args, **kwargs)
-        self.geometry('1920x1080')
-        self.configure(bg='#242424')
+        self.tk_title = "Arczy Puszka"
         
-        self.c1 = LabelFrame(self,text='Camera',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c2 = LabelFrame(self,text='Controls',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c3 = LabelFrame(self,text='Spectrometr View',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c4 = LabelFrame(self,text='Specterum',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c5 = LabelFrame(self,text='Analyzed lasers',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.LGRAY = '#424242'
+        self.DGRAY = '#242424'
+        self.RGRAY = '#444444'
+
+        self.title(self.tk_title) 
+        self.overrideredirect(True)
+        self.config(bg=self.DGRAY,highlightthickness=0)
+        #self.iconbitmap("your_icon.ico") # to show your own icon 
+        
+        self.title_bar = Frame(self, bg=self.RGRAY, relief='raised', bd=0,highlightthickness=0)
+        
+        self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy,bg=self.RGRAY,padx=2,pady=2,font=("calibri", 13),bd=0,fg='white',highlightthickness=0)
+        self.minimize_button = Button(self.title_bar, text=' 🗕 ',command=self.minimize_me,bg=self.RGRAY,padx=2,pady=2,bd=0,fg='white',font=("calibri", 13),highlightthickness=0)
+        self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY,bd=0,fg='white',font=("helvetica", 10),highlightthickness=0)
+        
+        self.window = Frame(self, bg=self.DGRAY,highlightthickness=0)
+        
+        self.title_bar.pack(fill=X)
+        self.close_button.pack(side=RIGHT,ipadx=7,ipady=1)
+        self.minimize_button.pack(side=RIGHT,ipadx=7,ipady=1)
+        self.title_bar_title.pack(side=LEFT, padx=10)
+        self.window.pack(expand=1, fill=BOTH)
+
+        self.close_button.bind('<Enter>',lambda e:self.changex_on_hovering())
+        self.close_button.bind('<Leave>',lambda e:self.returnx_to_normalstate())
+
+        self.bind("<Expose>",lambda e:self.deminimize())
+        self.after(10, lambda: self.set_appwindow())
+        
+        self.c1 = LabelFrame(self.window,text='Camera',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c2 = LabelFrame(self.window,text='Controls',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c3 = LabelFrame(self.window,text='Spectrometr View',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c4 = LabelFrame(self.window,text='Specterum',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c5 = LabelFrame(self.window,text='Analyzed lasers',bg='#242424',highlightbackground='#ffffff',fg='white')
+        
+        self.canvas = Canvas(self.c5,bg='#242424')
+        self.scrollbar_x = ttk.Scrollbar(self.c5, orient="horizontal", command=self.canvas.xview)
+        self.scrollbar_y = ttk.Scrollbar(self.c5, orient="vertical", command=self.canvas.yview)
+        self.button_frame = Frame(self.canvas,bg='#242424')
+        
+        self.frame_label = Label(self.c1)
+        self.spectrometr_image = Label(self.c3,text='No camera detected')
+        
+        self.left = Button(self.c2,text='←',width=2,height=1,command=lambda :self.move('l'))
+        self.right = Button(self.c2,text='→',width=2,height=1,command=lambda :self.move('r'))
+        self.up = Button(self.c2,text='↑',width=2,height=1,command=lambda :self.move('u'))
+        self.down = Button(self.c2,text='↓',width=2,height=1,command=lambda :self.move('d'))
+        self.origin = Button(self.c2,text='o',width=2,height=1,command=lambda:self.move('o'))
+        self.v = Label(self.c2)
+        
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         self.c3.grid(row=1, column=0, sticky="nsew", padx=5, pady=5, rowspan=2)
         self.c4.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
         self.c5.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
-        self.update_sizes()
-        self.bind("<Configure>", lambda event: self.update_sizes())
-        
-        self.canvas = Canvas(self.c5,bg='#242424')
+        self.left.place(x=25,y=50)
+        self.right.place(x=75,y=50)
+        self.up.place(x=50,y=25)
+        self.down.place(x=50,y=75)
+        self.origin.place(x=50,y=50)
+        self.v.place(x=50,y=100)
+        self.frame_label.place(x=0,y=0)
+        self.spectrometr_image.place(x=0,y=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-
-        scrollbar_x = ttk.Scrollbar(self.c5, orient="horizontal", command=self.canvas.xview)
-        scrollbar_x.grid(row=1, column=0, sticky="ew")
-
-        scrollbar_y = ttk.Scrollbar(self.c5, orient="vertical", command=self.canvas.yview)
-        scrollbar_y.grid(row=0, column=1, sticky="ns")
-        
-        self.custom_scroll()
-
-        self.canvas.configure(xscrollcommand=scrollbar_x.set, yscrollcommand=scrollbar_y.set)
-
+        self.scrollbar_x.grid(row=1, column=0, sticky="ew")
+        self.scrollbar_y.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(xscrollcommand=self.scrollbar_x.set, yscrollcommand=self.scrollbar_y.set)
+        self.canvas.create_window((0, 0), window=self.button_frame, anchor="nw")
+        self.canvas.bind("<Configure>", lambda event: self.update_canvas())
         self.c5.grid_rowconfigure(0, weight=1)
         self.c5.grid_columnconfigure(0, weight=1)
-
-        self.button_frame = Frame(self.canvas,bg='#242424')
-        self.canvas.create_window((0, 0), window=self.button_frame, anchor="nw")
+        
+        self.update_sizes()
+        self.bind("<Configure>", lambda e: self.update_sizes())
         
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
-        self.measurements = range(10)
+        self.measurements = [1,2,3]
         self.data = range(100)
         self.speedX = 1
         self.speedY = 1
-        
-        self.draw_measurements()
-        
-        self.update_canvas()
-        self.canvas.bind("<Configure>", lambda event: self.update_canvas())
-        
-        self.frame_label = Label(self.c1)
-        self.frame_label.place(x=0,y=0)
-        self.spectrometr_image = Label(self.c3,text='No camera detected')
-        self.spectrometr_image.place(x=0,y=0)
-        
-        self.left = Button(self.c2,text='←',width=2,height=1,command=lambda :self.move('l'))
-        self.left.place(x=25,y=50)
-        self.right = Button(self.c2,text='→',width=2,height=1,command=lambda :self.move('r'))
-        self.right.place(x=75,y=50)
-        self.up = Button(self.c2,text='↑',width=2,height=1,command=lambda :self.move('u'))
-        self.up.place(x=50,y=25)
-        self.down = Button(self.c2,text='↓',width=2,height=1,command=lambda :self.move('d'))
-        self.down.place(x=50,y=75)
-        self.origin = Button(self.c2,text='o',width=2,height=1,command=lambda:self.move('o'))
-        self.origin.place(x=50,y=50)
-        self.v = Label(self.c2)
-        self.v.place(x=50,y=100)
         
         self.image = None        
         self.connected = False
@@ -140,12 +159,48 @@ class App(Tk):
         else:
             self.connected = False
         
+        self.draw_measurements()
+        self.custom_scroll()
+        self.update_canvas()
         self.create_widgets()
         self.update_sizes()
         
+    def set_appwindow(self): 
+        GWL_EXSTYLE = -20
+        WS_EX_APPWINDOW = 0x00040000
+        WS_EX_TOOLWINDOW = 0x00000080
+        hwnd = windll.user32.GetParent(self.winfo_id())
+        stylew = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        stylew = stylew & ~WS_EX_TOOLWINDOW
+        stylew = stylew | WS_EX_APPWINDOW
+        res = windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, stylew)
+    
+        self.wm_withdraw()
+        self.after(10, lambda: self.wm_deiconify())
+        self.state('zoomed')
+        self.update()
+        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
+        
+    def minimize_me(self):
+        self.overrideredirect(False)
+        self.attributes('-alpha',0)
+        self.wm_state('iconic')
+        
+    def deminimize(self):
+        self.overrideredirect(True)
+        self.attributes('-alpha',1)
+        self.wm_state('zoomed')
+
+    def changex_on_hovering(self):
+        self.close_button['bg']='red'
+        
+    def returnx_to_normalstate(self):
+        self.close_button['bg']=self.RGRAY
+        
+        
     def update_sizes(self):
-        root_width = self.winfo_width()
-        root_height = self.winfo_height()
+        root_width = self.window.winfo_width()
+        root_height = self.window.winfo_height()
 
         frame_width = root_width // 2 -10
         frame_height = root_height // 4 -10
@@ -176,7 +231,7 @@ class App(Tk):
             self.move(s[0],s[1])
         
     def move(self,dir,step=100):
-        self.measurements.append(1)
+        self.measurements.append(len(self.measurements))
         self.draw_measurements()
         self.update_canvas()
         if self.connected:
@@ -214,6 +269,8 @@ class App(Tk):
         self.direction_label = Label(self.c1, textvariable=self.direction)
         self.direction_label.grid(row=0,column=1)
         self.state('zoomed')
+        self.update()
+        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
         
     def custom_scroll(self):
         style = ttk.Style()
@@ -422,16 +479,12 @@ def jog(axis, step):
 def move_to_position(x, y):
     print(f"Moving to position X: {x}, Y: {y}")
     
-
 if __name__ == "__main__":
-    global previewState
-    global hCamera
-    global topHwnd
     app = App()
     
-    menu = Menu(app,bg='#242424')
-    app.config(menu=menu)
-    fileMenu = Menu(menu,tearoff=0)
-    fileMenu.add_command(label="Options", command=lambda:Options(app.c1,app))
-    menu.add_cascade(label="File", menu=fileMenu)
+    #menu = Menu(app.window, background='#242424', fg='#242424')
+    #fileMenu = Menu(menu,tearoff=0, background='#424242', foreground='black')
+    #fileMenu.add_command(label="Options", command=lambda:Options(app,app))
+    #app.config(menu=menu)
+    #menu.add_cascade(label="File", menu=fileMenu)
     app.mainloop()
