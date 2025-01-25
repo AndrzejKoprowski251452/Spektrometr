@@ -69,6 +69,11 @@ class App(Tk):
         self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy,bg=self.RGRAY,padx=2,pady=2,font=("calibri", 13),bd=0,fg='white',highlightthickness=0)
         self.minimize_button = Button(self.title_bar, text=' 🗕 ',command=self.minimize_me,bg=self.RGRAY,padx=2,pady=2,bd=0,fg='white',font=("calibri", 13),highlightthickness=0)
         self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY,bd=0,fg='white',font=("helvetica", 10),highlightthickness=0)
+        self.menu_button = Button(self.title_bar, text=' ≡ ',command=self.show_menu,bg=self.RGRAY,padx=2,pady=2,bd=0,fg='white',font=("calibri", 13),highlightthickness=0)
+        self.menu_button.pack(side=LEFT,ipadx=7,ipady=1)
+        menu = Menu(self, tearoff=0)
+        menu.add_command(label="Options", command=lambda: Options(self, self))
+        self.menu_bar = menu
         
         self.window = Frame(self, bg=self.DGRAY,highlightthickness=0)
         
@@ -86,16 +91,19 @@ class App(Tk):
         self.bind("<Expose>",lambda e:self.deminimize())
         self.after(10, lambda: self.set_appwindow())
         
-        self.c1 = LabelFrame(self.window,text='Camera',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c2 = LabelFrame(self.window,text='Controls',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c3 = LabelFrame(self.window,text='Spectrometr View',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c4 = LabelFrame(self.window,text='Specterum',bg='#242424',highlightbackground='#ffffff',fg='white')
-        self.c5 = LabelFrame(self.window,text='Analyzed lasers',bg='#242424',highlightbackground='#ffffff',fg='white')
+        self.c1 = LabelFrame(self.window,text='Camera')
+        self.c2 = LabelFrame(self.window,text='Controls')
+        self.c3 = LabelFrame(self.window,text='Spectrometr View')
+        self.c4 = LabelFrame(self.window,text='Specterum')
+        self.c5 = LabelFrame(self.window,text='Analyzed lasers')
         
-        self.canvas = Canvas(self.c5,bg='#242424')
+        self.console = Text(self.c2)
+        self.console.place(x=0,y=self.c2.winfo_height()-20,width=self.c2.winfo_width(),height=20)
+        
+        self.canvas = Canvas(self.c5,bg=self.DGRAY)
         self.scrollbar_x = ttk.Scrollbar(self.c5, orient="horizontal", command=self.canvas.xview)
         self.scrollbar_y = ttk.Scrollbar(self.c5, orient="vertical", command=self.canvas.yview)
-        self.button_frame = Frame(self.canvas,bg='#242424')
+        self.button_frame = Frame(self.canvas,bg=self.DGRAY)
         
         self.frame_label = Label(self.c1)
         self.spectrometr_image = Label(self.c3,text='No camera detected')
@@ -105,7 +113,7 @@ class App(Tk):
         self.up = Button(self.c2,text='↑',width=2,height=1,command=lambda :self.move('u'))
         self.down = Button(self.c2,text='↓',width=2,height=1,command=lambda :self.move('d'))
         self.origin = Button(self.c2,text='o',width=2,height=1,command=lambda:self.move('o'))
-        self.v = Label(self.c2)
+        self.v = Label(self.c2,text='x:0,y:0',background=self.DGRAY,fg='white',anchor='center')
         
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -117,15 +125,15 @@ class App(Tk):
         self.up.place(x=50,y=25)
         self.down.place(x=50,y=75)
         self.origin.place(x=50,y=50)
-        self.v.place(x=50,y=100)
+        self.v.place(x=42,y=100)
         self.frame_label.place(x=0,y=0)
         self.spectrometr_image.place(x=0,y=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.scrollbar_x.grid(row=1, column=0, sticky="ew")
         self.scrollbar_y.grid(row=0, column=1, sticky="ns")
-        self.canvas.configure(xscrollcommand=self.scrollbar_x.set, yscrollcommand=self.scrollbar_y.set)
-        self.canvas.create_window((0, 0), window=self.button_frame, anchor="nw")
+        self.canvas.configure(xscrollcommand=self.scrollbar_x.set, yscrollcommand=self.scrollbar_y.set,background=self.DGRAY)
         self.canvas.bind("<Configure>", lambda event: self.update_canvas())
+        self.canvas.create_window((0, 0), window=self.button_frame, anchor="nw")
         self.c5.grid_rowconfigure(0, weight=1)
         self.c5.grid_columnconfigure(0, weight=1)
         
@@ -145,7 +153,7 @@ class App(Tk):
         self.calibrated = False
         
         self.ports = []
-        if len(list(serial.tools.list_ports.comports())) != 0 and False:
+        if len(list(serial.tools.list_ports.comports())) != 0 and 'COM' in list(serial.tools.list_ports.comports()):
             self.connected = True
             for i in list(serial.tools.list_ports.comports()):
                 s = serial.Serial(str(i)[:4])
@@ -166,7 +174,12 @@ class App(Tk):
         self.update_canvas()
         self.create_widgets()
         self.update_sizes()
+        for w in self.window.winfo_children():
+            w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
         
+    def show_menu(self):
+        self.menu_bar.post(self.menu_button.winfo_rootx(), self.menu_button.winfo_rooty() + self.menu_button.winfo_height())
+
     def set_appwindow(self): 
         GWL_EXSTYLE = -20
         WS_EX_APPWINDOW = 0x00040000
@@ -228,9 +241,6 @@ class App(Tk):
     def update_canvas(self):
         self.button_frame.update_idletasks()
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
-        canvas_width = self.button_frame.winfo_width()
-        canvas_height = self.button_frame.winfo_height()
-        self.canvas.itemconfig(self.canvas.create_window((0, 0), window=self.button_frame, anchor="nw"), width=canvas_width, height=canvas_height)
         
     def sequence(self,st):
         steps = st.split(',')
@@ -241,7 +251,6 @@ class App(Tk):
     def move(self,dir,step=100):
         self.measurements.append(len(self.measurements))
         self.draw_measurements()
-        self.update_canvas()
         if self.connected:
             if dir == 'r':
                 self.ports[0].write((f"M:1+P{step}\r\n").encode())
@@ -276,9 +285,6 @@ class App(Tk):
         Label(self.c1, text="Detected Movement Direction:").grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction)
         self.direction_label.grid(row=0,column=1)
-        self.state('zoomed')
-        self.update()
-        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
         
     def custom_scroll(self):
         style = ttk.Style()
@@ -286,22 +292,22 @@ class App(Tk):
         style.configure(
             "Horizontal.TScrollbar",
             gripcount=0,
-            background='#3d3d3d',
-            darkcolor='#242424',
-            lightcolor='#242424',
-            troughcolor='#242424',
-            bordercolor='#242424',
-            arrowcolor='#242424',
+            background=self.LGRAY,
+            darkcolor=self.DGRAY,
+            lightcolor=self.DGRAY,
+            troughcolor=self.DGRAY,
+            bordercolor=self.DGRAY,
+            arrowcolor=self.DGRAY,
         )
         style.configure(
             "Vertical.TScrollbar",
             gripcount=0,
-            background='#3d3d3d',
-            darkcolor='#242424',
-            lightcolor='#242424',
-            troughcolor='#242424',
-            bordercolor='#242424',
-            arrowcolor='#242424',
+            background=self.LGRAY,
+            darkcolor=self.DGRAY,
+            lightcolor=self.DGRAY,
+            troughcolor=self.DGRAY,
+            bordercolor=self.DGRAY,
+            arrowcolor=self.DGRAY,
         )
 
     def start_camera(self):
@@ -359,7 +365,6 @@ class App(Tk):
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.image = Image.fromarray(rgb_frame)
                 image_tk = ImageTk.PhotoImage(image=self.image)
-
                 self.frame_label.configure(image=image_tk)
                 self.frame_label.image = image_tk
 
@@ -378,7 +383,7 @@ class App(Tk):
         Z1 = np.cos(X)
         Z2 = np.sin(Y)
         data = (Z1 - Z2) * 2
-        fig, ax = plt.subplots(figsize=(5, 5),facecolor='#242424')
+        fig, ax = plt.subplots(figsize=(5, 5),facecolor=self.DGRAY)
         norm = Normalize(vmin=np.min(data), vmax=np.max(data))
         cax = ax.imshow(data, cmap='hot', norm=norm)
         ax.set_xlabel('Oś X', color='white')
@@ -395,8 +400,8 @@ class App(Tk):
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
     def spectrum(self):
-        fig, ax = plt.subplots(figsize=(5, 5),facecolor='#242424')
-        ax.set_facecolor('#242424')
+        fig, ax = plt.subplots(figsize=(5, 5),facecolor=self.DGRAY)
+        ax.set_facecolor(self.DGRAY)
         x = np.linspace(-10, 10, 100)
         y = np.exp(-x**2)
         ax.plot(x,y,color='darkgreen')
@@ -409,17 +414,20 @@ class App(Tk):
         plt.tight_layout()
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
-            b = Button(self.button_frame,text=f'{i}',command=lambda: self.hotmap(i,n),width=2,height=1)
-            b.grid(row=i // 10,column=i%40)
+            Button(self.button_frame,text=f'{i}',command=lambda: self.hotmap(i,n),width=2,height=1).grid(row=i // 10,column=i%40)
+        self.update_canvas()
 
         
 class Options(Toplevel):
     def __init__(self, parent, controller):
         Toplevel.__init__(self, parent)
+        self.DGRAY = parent.DGRAY
+        self.LGRAY = parent.LGRAY
+        self.RGRAY = parent.RGRAY   
         self.geometry('500x400')
-        self.configure(bg='#242424')
+        self.configure(bg=self.DGRAY)
         self.controller = controller
-        x_frame = LabelFrame(self, text="X-Axis Controls",bg='#242424',fg='white')
+        x_frame = LabelFrame(self, text="X-Axis Controls",bg=self.DGRAY,fg='white')
         x_frame.place(x=10, y=10, width=220, height=120)
         
         Button(x_frame, text="Move Left", command=lambda: move_x_axis("left")).place(x=10, y=10, width=80, height=30)
@@ -429,7 +437,7 @@ class Options(Toplevel):
         self.x_speed = Scale(x_frame, from_=0, to=100, orient="horizontal")
         self.x_speed.place(x=60, y=40, width=120, height=40)
 
-        y_frame = LabelFrame(self, text="Y-Axis Controls",bg='#242424',fg='white')
+        y_frame = LabelFrame(self, text="Y-Axis Controls",bg=self.DGRAY,fg='white')
         y_frame.place(x=250, y=10, width=220, height=120)
 
         Button(y_frame, text="Move Up", command=lambda: move_y_axis("up")).place(x=10, y=10, width=80, height=30)
@@ -439,7 +447,7 @@ class Options(Toplevel):
         self.y_speed = Scale(y_frame, from_=0, to=100, orient="horizontal")
         self.y_speed.place(x=60, y=40, width=120, height=40)
 
-        calib_frame = LabelFrame(self, text="Calibration",bg='#242424',fg='white')
+        calib_frame = LabelFrame(self, text="Calibration",bg=self.DGRAY,fg='white')
         calib_frame.place(x=10, y=140, width=460, height=100)
 
         Button(calib_frame, text="Set Origin", command=set_origin).place(x=10, y=10, width=100, height=30)
@@ -451,7 +459,7 @@ class Options(Toplevel):
         Button(calib_frame, text="Jog Y +1", command=lambda: jog("Y", 1)).place(x=230, y=50, width=80, height=30)
         Button(calib_frame, text="Jog Y -1", command=lambda: jog("Y", -1)).place(x=320, y=50, width=80, height=30)
 
-        pos_frame = LabelFrame(self, text="Position Control",bg='#242424',fg='white')
+        pos_frame = LabelFrame(self, text="Position Control",bg=self.DGRAY,fg='white')
         pos_frame.place(x=10, y=250, width=460, height=80)
 
         Label(pos_frame, text="X:").place(x=10, y=10)
@@ -465,6 +473,11 @@ class Options(Toplevel):
         Button(pos_frame, text="Move to Position", command=lambda: move_to_position(self.x_entry.get(), self.y_entry.get())).place(x=240, y=10, width=150, height=30)
 
         Button(self, text="STOP", command=stop_motors).place(x=190, y=340, width=100, height=30)
+        
+        for w in self.winfo_children():
+            w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
+            for w in w.winfo_children():
+                w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
         
 def move_x_axis(direction):
     print(f"X-axis moving {direction}")
@@ -489,10 +502,4 @@ def move_to_position(x, y):
     
 if __name__ == "__main__":
     app = App()
-    
-    # menu = Menu(app.title_bar, background='#242424', fg='#242424')
-    # fileMenu = Menu(menu,tearoff=0, background='#424242', foreground='black')
-    # fileMenu.add_command(label="Options", command=lambda:Options(app,app))
-    # app.config(menu=menu)
-    # menu.add_cascade(label="File", menu=fileMenu)
     app.mainloop()
