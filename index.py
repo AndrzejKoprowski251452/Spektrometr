@@ -1,10 +1,11 @@
 from tkinter import *
-from tkinter import ttk
+from tkinter import ttk,filedialog
 from pixelinkWrapper import*
 from PIL import Image, ImageTk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import Normalize
 from ctypes import*
+import sys
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +14,173 @@ import time
 from libsonyapi.camera import Camera
 from libsonyapi.actions import Actions
 
+class CustomWindow:
+    def __init__(self, *args, **kwargs):
+        self.tk_title = "Custom Window"
+        self.LGRAY = '#424242'
+        self.DGRAY = '#242424'
+        self.RGRAY = '#444444'
+        self.MGRAY = '#333333'
+
+        self.title_bar = Frame(self, bg=self.RGRAY, relief='raised', bd=0, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.MGRAY)
+        
+        self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy, bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='white', highlightthickness=0)
+        self.minimize_button = Button(self.title_bar, text=' 🗕 ', command=self.minimize_me, bg=self.RGRAY, padx=2, pady=2, bd=0, fg='white', font=("calibri", 13), highlightthickness=0)
+        self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY, bd=0, fg='white', font=("helvetica", 10), highlightthickness=0)
+        self.window = Frame(self, bg=self.DGRAY, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.MGRAY)
+        
+        self.title_bar.pack(fill=X)
+        self.title_bar_title.pack(side=LEFT, padx=10)
+        self.close_button.pack(side=RIGHT, ipadx=7, ipady=1)
+        self.minimize_button.pack(side=RIGHT, ipadx=7, ipady=1)
+        self.window.pack(expand=1, fill=BOTH)
+        
+        self.title_bar.bind('<Button-1>', self.get_pos)
+        self.title_bar_title.bind('<Button-1>', self.get_pos)
+
+        self.close_button.bind('<Enter>', lambda e: self.changex_on_hovering())
+        self.close_button.bind('<Leave>', lambda e: self.returnx_to_normalstate())
+        self.minimize_button.bind('<Enter>', lambda e: self.change__on_hovering())
+        self.minimize_button.bind('<Leave>', lambda e: self.return__to_normalstate())
+        
+        self.custom_scroll()
+        
+        if self.winfo_class() == 'Tk':
+            self.bind("<Expose>", lambda e: self.deminimize())
+        self.after(10, lambda: self.set_appwindow())
+      
+    def update_colors(self):  
+        for w in self.window.winfo_children():
+            w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
+        
+    def get_pos(self,event):
+        xwin = self.winfo_x()
+        ywin = self.winfo_y()
+        startx = event.x_root
+        starty = event.y_root
+
+        ywin = ywin - starty
+        xwin = xwin - startx
+
+        
+        def move_window(event):
+            self.config(cursor="fleur")
+            self.geometry(f'+{event.x_root + xwin}+{event.y_root + ywin}')
+
+
+        def release_window(event):
+            self.config(cursor="arrow")
+            
+            
+        self.title_bar.bind('<B1-Motion>', move_window)
+        self.title_bar.bind('<ButtonRelease-1>', release_window)
+        self.title_bar_title.bind('<B1-Motion>', move_window)
+        self.title_bar_title.bind('<ButtonRelease-1>', release_window)
+
+    def set_appwindow(self): 
+        GWL_EXSTYLE = -20
+        WS_EX_APPWINDOW = 0x00040000
+        WS_EX_TOOLWINDOW = 0x00000080
+        hwnd = windll.user32.GetParent(self.winfo_id())
+        stylew = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        stylew = stylew & ~WS_EX_TOOLWINDOW
+        stylew = stylew | WS_EX_APPWINDOW
+        res = windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, stylew)
+    
+        self.wm_withdraw()
+        self.after(10, lambda: self.wm_deiconify())
+        self.update()
+        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
+        
+    def minimize_me(self):
+        self.overrideredirect(False)
+        self.attributes('-alpha',0)
+        self.wm_state('iconic')
+        
+    def deminimize(self):
+        self.overrideredirect(True)
+        self.attributes('-alpha',1)
+        self.wm_state('zoomed')
+
+    def changex_on_hovering(self):
+        self.close_button['bg']='red'
+        
+    def returnx_to_normalstate(self):
+        self.close_button['bg']=self.RGRAY
+        
+    def change__on_hovering(self):
+        self.minimize_button['bg']='gray'
+        
+    def return__to_normalstate(self):
+        self.minimize_button['bg']=self.RGRAY
+        
+    def set_title(self, title):
+        self.tk_title = title
+        self.title_bar_title.config(text=self.tk_title)
+        self.title(self.tk_title)
+        
+    def custom_scroll(self):
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure(
+            "Horizontal.TScrollbar",
+            gripcount=0,
+            background=self.LGRAY,
+            darkcolor=self.DGRAY,
+            lightcolor=self.DGRAY,
+            troughcolor=self.DGRAY,
+            bordercolor=self.DGRAY,
+            arrowcolor=self.DGRAY,
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            gripcount=0,
+            background=self.LGRAY,
+            darkcolor=self.DGRAY,
+            lightcolor=self.DGRAY,
+            troughcolor=self.DGRAY,
+            bordercolor=self.DGRAY,
+            arrowcolor=self.DGRAY,
+        )
+        
+
+class CustomTk(Tk, CustomWindow):
+    def __init__(self, *args, **kwargs):
+        Tk.__init__(self, *args, **kwargs)
+        CustomWindow.__init__(self, *args, **kwargs)
+        self.tk_title = "Arczy Puszka"
+        self.overrideredirect(True)
+        self.config(bg=self.DGRAY, highlightthickness=0)
+        self.state('zoomed')
+        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
+        self.menu_button = Button(self.title_bar, text=' ≡ ', command=self.show_menu, bg=self.RGRAY, padx=2, pady=2, bd=0, fg='white', font=("calibri", 13), highlightthickness=0)
+        self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7, ipady=1)
+        
+        menu = Menu(self, tearoff=0)
+        menu.config(bg=self.DGRAY,fg='white',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white')
+        menu.add_command(label="Options", command=lambda: Options(self))
+        self.menu_bar = menu
+        
+    def show_menu(self):
+        self.menu_bar.post(self.menu_button.winfo_rootx(), self.menu_button.winfo_rooty() + self.menu_button.winfo_height())
+
+
+class CustomToplevel(Toplevel, CustomWindow):
+    def __init__(self, *args, **kwargs):
+        Toplevel.__init__(self, *args, **kwargs)
+        CustomWindow.__init__(self, *args, **kwargs)
+        self.overrideredirect(True)
+        self.config(bg=self.DGRAY, highlightthickness=0)
+        
+class StreamToFunction:
+    def __init__(self, func):
+        self.func = func
+
+    def write(self, message):
+        if message.strip():
+            self.func(message)
+    def flush(self):
+        pass
 
 class MotionDetector:
     def __init__(self, video_source=1):
@@ -50,55 +218,22 @@ class MotionDetector:
     def release(self):
         self.cap.release()
 
-class App(Tk):
+class App(CustomTk):
     def __init__(self, *args, **kwargs):
-        Tk.__init__(self, *args, **kwargs)
-        self.tk_title = "Arczy Puszka"
+        CustomTk.__init__(self, *args, **kwargs)
+        self.set_title("Arczy Puszka")
+        self.iconbitmap("icon.ico")
         
-        self.LGRAY = '#424242'
-        self.DGRAY = '#242424'
-        self.RGRAY = '#444444'
+        sys.stdout = StreamToFunction(self.console_data)
 
-        self.title(self.tk_title) 
-        self.overrideredirect(True)
-        self.config(bg=self.DGRAY,highlightthickness=0)
-        #self.iconbitmap("your_icon.ico") # to show your own icon 
-        
-        self.title_bar = Frame(self, bg=self.RGRAY, relief='raised', bd=0,highlightthickness=0)
-        
-        self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy,bg=self.RGRAY,padx=2,pady=2,font=("calibri", 13),bd=0,fg='white',highlightthickness=0)
-        self.minimize_button = Button(self.title_bar, text=' 🗕 ',command=self.minimize_me,bg=self.RGRAY,padx=2,pady=2,bd=0,fg='white',font=("calibri", 13),highlightthickness=0)
-        self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY,bd=0,fg='white',font=("helvetica", 10),highlightthickness=0)
-        self.menu_button = Button(self.title_bar, text=' ≡ ',command=self.show_menu,bg=self.RGRAY,padx=2,pady=2,bd=0,fg='white',font=("calibri", 13),highlightthickness=0)
-        self.menu_button.pack(side=LEFT,ipadx=7,ipady=1)
-        menu = Menu(self, tearoff=0)
-        menu.add_command(label="Options", command=lambda: Options(self, self))
-        self.menu_bar = menu
-        
-        self.window = Frame(self, bg=self.DGRAY,highlightthickness=0)
-        
-        self.title_bar.pack(fill=X)
-        self.close_button.pack(side=RIGHT,ipadx=7,ipady=1)
-        self.minimize_button.pack(side=RIGHT,ipadx=7,ipady=1)
-        self.title_bar_title.pack(side=LEFT, padx=10)
-        self.window.pack(expand=1, fill=BOTH)
-
-        self.close_button.bind('<Enter>',lambda e:self.changex_on_hovering())
-        self.close_button.bind('<Leave>',lambda e:self.returnx_to_normalstate())
-        self.minimize_button.bind('<Enter>',lambda e:self.change__on_hovering())
-        self.minimize_button.bind('<Leave>',lambda e:self.return__to_normalstate())
-
-        self.bind("<Expose>",lambda e:self.deminimize())
-        self.after(10, lambda: self.set_appwindow())
-        
         self.c1 = LabelFrame(self.window,text='Camera')
         self.c2 = LabelFrame(self.window,text='Controls')
         self.c3 = LabelFrame(self.window,text='Spectrometr View')
         self.c4 = LabelFrame(self.window,text='Specterum')
         self.c5 = LabelFrame(self.window,text='Analyzed lasers')
         
-        self.console = Text(self.c2)
-        self.console.place(x=0,y=self.c2.winfo_height()-20,width=self.c2.winfo_width(),height=20)
+        self.console = Text(self.c2,background=self.DGRAY,fg='white',height=10,foreground='white')
+        self.console.grid(row=10,column=0,sticky='ews',columnspan=10)
         
         self.canvas = Canvas(self.c5,bg=self.DGRAY)
         self.scrollbar_x = ttk.Scrollbar(self.c5, orient="horizontal", command=self.canvas.xview)
@@ -108,12 +243,12 @@ class App(Tk):
         self.frame_label = Label(self.c1)
         self.spectrometr_image = Label(self.c3,text='No camera detected')
         
-        self.left = Button(self.c2,text='←',width=2,height=1,command=lambda :self.move('l'))
-        self.right = Button(self.c2,text='→',width=2,height=1,command=lambda :self.move('r'))
-        self.up = Button(self.c2,text='↑',width=2,height=1,command=lambda :self.move('u'))
-        self.down = Button(self.c2,text='↓',width=2,height=1,command=lambda :self.move('d'))
-        self.origin = Button(self.c2,text='o',width=2,height=1,command=lambda:self.move('o'))
-        self.v = Label(self.c2,text='x:0,y:0',background=self.DGRAY,fg='white',anchor='center')
+        self.left = Button(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'))
+        self.right = Button(self.c1,text='→',width=2,height=1,command=lambda :self.move('r'))
+        self.up = Button(self.c1,text='↑',width=2,height=1,command=lambda :self.move('u'))
+        self.down = Button(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'))
+        self.origin = Button(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'))
+        self.v = Label(self.c1,text='x:0,y:0',background=self.DGRAY,fg='white',anchor='center')
         
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -137,9 +272,6 @@ class App(Tk):
         self.c5.grid_rowconfigure(0, weight=1)
         self.c5.grid_columnconfigure(0, weight=1)
         
-        self.update_sizes()
-        self.bind("<Configure>", lambda e: self.update_sizes())
-        
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
@@ -147,6 +279,15 @@ class App(Tk):
         self.data = range(100)
         self.speedX = 1
         self.speedY = 1
+        
+        self.tasks = [
+            {"name": "Camera 1", "status": StringVar(value="Pending")},
+            {"name": "Camera 2", "status": StringVar(value="Pending")},
+            {"name": "Etalonu calibration", "status": StringVar(value="Pending")},
+            {"name": "Grid calibration", "status": StringVar(value="Pending")},
+            {"name": "Auto exposure", "status": StringVar(value="Pending")},
+            {"name": "Auto white balance", "status": StringVar(value="Pending")}
+        ]
         
         self.image = None        
         self.connected = False
@@ -169,55 +310,37 @@ class App(Tk):
         else:
             self.connected = False
         
-        self.draw_measurements()
-        self.custom_scroll()
-        self.update_canvas()
+        self.update_colors()
         self.create_widgets()
+        self.draw_measurements()
         self.update_sizes()
-        for w in self.window.winfo_children():
-            w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
         
-    def show_menu(self):
-        self.menu_bar.post(self.menu_button.winfo_rootx(), self.menu_button.winfo_rooty() + self.menu_button.winfo_height())
+    def console_data(self,f):
+        self.console.insert(INSERT, f'{(time.time()):.2f}: {f}\n')
+        self.console.see("end")
 
-    def set_appwindow(self): 
-        GWL_EXSTYLE = -20
-        WS_EX_APPWINDOW = 0x00040000
-        WS_EX_TOOLWINDOW = 0x00000080
-        hwnd = windll.user32.GetParent(self.winfo_id())
-        stylew = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        stylew = stylew & ~WS_EX_TOOLWINDOW
-        stylew = stylew | WS_EX_APPWINDOW
-        res = windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, stylew)
-    
-        self.wm_withdraw()
-        self.after(10, lambda: self.wm_deiconify())
-        self.state('zoomed')
-        self.update()
-        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
-        
-    def minimize_me(self):
-        self.overrideredirect(False)
-        self.attributes('-alpha',0)
-        self.wm_state('iconic')
-        
-    def deminimize(self):
-        self.overrideredirect(True)
-        self.attributes('-alpha',1)
-        self.wm_state('zoomed')
+    def create_task_list(self):
+        for i, task in enumerate(self.tasks):
+            frame = Frame(self.c2, bg=self.DGRAY)
+            frame.grid(row=i, column=0, sticky="ew", pady=5)
 
-    def changex_on_hovering(self):
-        self.close_button['bg']='red'
-        
-    def returnx_to_normalstate(self):
-        self.close_button['bg']=self.RGRAY
-        
-    def change__on_hovering(self):
-        self.minimize_button['bg']='gray'
-        
-    def return__to_normalstate(self):
-        self.minimize_button['bg']=self.RGRAY
-        
+            label = Label(frame, text=task["name"], bg=self.DGRAY, fg='white')
+            label.grid(row=0, column=0, padx=10)
+            status_label = Label(frame, textvariable=task["status"], bg=self.DGRAY, fg='red')
+            status_label.grid(row=0, column=1, padx=10)
+
+            complete_button = Button(frame, text="Complete", command=lambda t=task, sl=status_label: self.complete_task(t, sl), bg=self.RGRAY, fg='white')
+            complete_button.grid(row=0, column=2, padx=10)
+
+            options_button = Button(frame, text="Options", command=lambda t=task: self.show_task_options(t), bg=self.RGRAY, fg='white')
+            options_button.grid(row=0, column=3, padx=10)
+
+    def complete_task(self, task,status_label):
+        status_label.config(fg='green')
+        task["status"].set("Completed")
+
+    def show_task_options(self, task):
+        print(f"Options for {task['name']}")
         
     def update_sizes(self):
         root_width = self.window.winfo_width()
@@ -281,34 +404,12 @@ class App(Tk):
         self.start_camera()
         self.start_spectrometr()
         self.spectrum()
+        self.create_task_list()
+        self.bind("<Configure>", lambda e: self.update_sizes())
         
         Label(self.c1, text="Detected Movement Direction:").grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction)
         self.direction_label.grid(row=0,column=1)
-        
-    def custom_scroll(self):
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure(
-            "Horizontal.TScrollbar",
-            gripcount=0,
-            background=self.LGRAY,
-            darkcolor=self.DGRAY,
-            lightcolor=self.DGRAY,
-            troughcolor=self.DGRAY,
-            bordercolor=self.DGRAY,
-            arrowcolor=self.DGRAY,
-        )
-        style.configure(
-            "Vertical.TScrollbar",
-            gripcount=0,
-            background=self.LGRAY,
-            darkcolor=self.DGRAY,
-            lightcolor=self.DGRAY,
-            troughcolor=self.DGRAY,
-            bordercolor=self.DGRAY,
-            arrowcolor=self.DGRAY,
-        )
 
     def start_camera(self):
         if not self.calibrated:
@@ -375,32 +476,10 @@ class App(Tk):
     def calibrate(self):
         pass
     def hotmap(self,i,n):
-        t = Toplevel()
-        t.title(f'{i}')
-        x = np.arange(0,self.image.width, 1)
-        y = np.arange(0,self.image.height, 1)
-        X, Y = np.meshgrid(x, y)
-        Z1 = np.cos(X)
-        Z2 = np.sin(Y)
-        data = (Z1 - Z2) * 2
-        fig, ax = plt.subplots(figsize=(5, 5),facecolor=self.DGRAY)
-        norm = Normalize(vmin=np.min(data), vmax=np.max(data))
-        cax = ax.imshow(data, cmap='hot', norm=norm)
-        ax.set_xlabel('Oś X', color='white')
-        ax.set_ylabel('Oś Y', color='white') 
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        cbar = fig.colorbar(cax, ax=ax, orientation='vertical')
-        cbar.set_ticks(cbar.get_ticks())
-        cbar.ax.tick_params(labelcolor='white')
-        img = self.image
-        #img = img.resize((data.shape[1], data.shape[0]))
-        ax.imshow(img, alpha=0.5)
-        canvas = FigureCanvasTkAgg(fig, master=t)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        HotmapWindow(self, i, n, self.image)
+  
     def spectrum(self):
-        fig, ax = plt.subplots(figsize=(5, 5),facecolor=self.DGRAY)
+        fig, ax = plt.subplots(figsize=(5, 2),facecolor=self.DGRAY)
         ax.set_facecolor(self.DGRAY)
         x = np.linspace(-10, 10, 100)
         y = np.exp(-x**2)
@@ -410,96 +489,67 @@ class App(Tk):
         ax.tick_params(axis='y', colors='white')
         canvas = FigureCanvasTkAgg(fig, master=self.c4)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        canvas.get_tk_widget().pack(fill=X, expand=True)
         plt.tight_layout()
+        
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
-            Button(self.button_frame,text=f'{i}',command=lambda: self.hotmap(i,n),width=2,height=1).grid(row=i // 10,column=i%40)
+            Button(self.button_frame,text=f'{i}',command=lambda i=i, n=n: self.hotmap(i,n),width=2,height=1).grid(row=i // 40,column=i%40)
         self.update_canvas()
-
         
-class Options(Toplevel):
-    def __init__(self, parent, controller):
-        Toplevel.__init__(self, parent)
-        self.DGRAY = parent.DGRAY
-        self.LGRAY = parent.LGRAY
-        self.RGRAY = parent.RGRAY   
+class HotmapWindow(CustomToplevel):
+    def __init__(self, parent, i, n, image):
+        CustomToplevel.__init__(self, parent)
+        self.set_title(f'{i}')
+
+        x = np.arange(0, image.width, 1)
+        y = np.arange(0, image.height, 1)
+        X, Y = np.meshgrid(x, y)
+        Z1 = np.cos(X)
+        Z2 = np.sin(Y)
+        data = (Z1 - Z2) * 2
+        fig, ax = plt.subplots(figsize=(5, 5), facecolor=self.DGRAY)
+        norm = Normalize(vmin=np.min(data), vmax=np.max(data))
+        cax = ax.imshow(data, cmap='hot', norm=norm)
+        ax.set_xlabel('Oś X', color='white')
+        ax.set_ylabel('Oś Y', color='white') 
+        ax.tick_params(axis='x', colors='white')
+        ax.tick_params(axis='y', colors='white')
+        cbar = fig.colorbar(cax, ax=ax, orientation='vertical')
+        cbar.set_ticks(cbar.get_ticks())
+        cbar.ax.tick_params(labelcolor='white')
+        img = image
+        ax.imshow(img, alpha=0.5)
+        canvas = FigureCanvasTkAgg(fig, master=self.window)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self.update_idletasks()
+        plot_width = canvas.get_tk_widget().winfo_width()
+        plot_height = canvas.get_tk_widget().winfo_height()
+        self.geometry(f"{plot_width}x{plot_height + self.title_bar.winfo_height()}")
+
+class Options(CustomToplevel):
+    def __init__(self, parent):
+        CustomToplevel.__init__(self, parent)
         self.geometry('500x400')
-        self.configure(bg=self.DGRAY)
-        self.controller = controller
-        x_frame = LabelFrame(self, text="X-Axis Controls",bg=self.DGRAY,fg='white')
-        x_frame.place(x=10, y=10, width=220, height=120)
-        
-        Button(x_frame, text="Move Left", command=lambda: move_x_axis("left")).place(x=10, y=10, width=80, height=30)
-        Button(x_frame, text="Move Right", command=lambda: move_x_axis("right")).place(x=100, y=10, width=80, height=30)
+        self.set_title("Options")
 
-        Label(x_frame, text="Speed:").place(x=10, y=50)
-        self.x_speed = Scale(x_frame, from_=0, to=100, orient="horizontal")
-        self.x_speed.place(x=60, y=40, width=120, height=40)
-
-        y_frame = LabelFrame(self, text="Y-Axis Controls",bg=self.DGRAY,fg='white')
-        y_frame.place(x=250, y=10, width=220, height=120)
-
-        Button(y_frame, text="Move Up", command=lambda: move_y_axis("up")).place(x=10, y=10, width=80, height=30)
-        Button(y_frame, text="Move Down", command=lambda: move_y_axis("down")).place(x=100, y=10, width=80, height=30)
-
-        Label(y_frame, text="Speed:").place(x=10, y=50)
-        self.y_speed = Scale(y_frame, from_=0, to=100, orient="horizontal")
-        self.y_speed.place(x=60, y=40, width=120, height=40)
-
-        calib_frame = LabelFrame(self, text="Calibration",bg=self.DGRAY,fg='white')
-        calib_frame.place(x=10, y=140, width=460, height=100)
-
-        Button(calib_frame, text="Set Origin", command=set_origin).place(x=10, y=10, width=100, height=30)
-        Button(calib_frame, text="Go to Origin", command=go_to_origin).place(x=120, y=10, width=100, height=30)
-
-        Button(calib_frame, text="Jog X +1", command=lambda: jog("X", 1)).place(x=230, y=10, width=80, height=30)
-        Button(calib_frame, text="Jog X -1", command=lambda: jog("X", -1)).place(x=320, y=10, width=80, height=30)
-
-        Button(calib_frame, text="Jog Y +1", command=lambda: jog("Y", 1)).place(x=230, y=50, width=80, height=30)
-        Button(calib_frame, text="Jog Y -1", command=lambda: jog("Y", -1)).place(x=320, y=50, width=80, height=30)
-
-        pos_frame = LabelFrame(self, text="Position Control",bg=self.DGRAY,fg='white')
-        pos_frame.place(x=10, y=250, width=460, height=80)
-
-        Label(pos_frame, text="X:").place(x=10, y=10)
-        self.x_entry = Entry(pos_frame, width=10)
-        self.x_entry.place(x=40, y=10)
-
-        Label(pos_frame, text="Y:").place(x=120, y=10)
-        self.y_entry = Entry(pos_frame, width=10)
-        self.y_entry.place(x=150, y=10)
-
-        Button(pos_frame, text="Move to Position", command=lambda: move_to_position(self.x_entry.get(), self.y_entry.get())).place(x=240, y=10, width=150, height=30)
-
-        Button(self, text="STOP", command=stop_motors).place(x=190, y=340, width=100, height=30)
-        
+        self.create_options()
         for w in self.winfo_children():
             w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
             for w in w.winfo_children():
                 w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
+
+    def create_options(self):
+        Label(self.window, text=f"Options for {1}", bg=self.DGRAY, fg='white').pack(pady=10)
+        Button(self.window, text="Import Settings", command=self.import_settings, bg=self.RGRAY, fg='white').pack(pady=10)
+
+    def import_settings(self):
+        file_path = filedialog.askopenfilename(title="Select Settings File", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        if file_path:
+            print(f"Importing settings from {file_path}")
+        self.focus()
         
-def move_x_axis(direction):
-    print(f"X-axis moving {direction}")
-
-def move_y_axis(direction):
-    print(f"Y-axis moving {direction}")
-
-def stop_motors():
-    print("Motors stopped")
-
-def set_origin():
-    print("Origin set to current position")
-
-def go_to_origin():
-    print("Moving to origin (0, 0)")
-
-def jog(axis, step):
-    print(f"Jogging {axis}-axis by {step} steps")
-
-def move_to_position(x, y):
-    print(f"Moving to position X: {x}, Y: {y}")
-    
 if __name__ == "__main__":
     app = App()
     app.mainloop()
