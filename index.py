@@ -11,8 +11,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import serial.tools.list_ports
 import time
+import json
 from libsonyapi.camera import Camera
 from libsonyapi.actions import Actions
+
+config = json.load(open('api.settings.json'))
+
+class SonyCamera:
+    def __init__(self):
+        self.camera = Camera()
+        self.actions = Actions(self.camera)
+        self.camera.startLiveview()
 
 class CustomWindow:
     def __init__(self, *args, **kwargs):
@@ -230,7 +239,7 @@ class App(CustomTk):
         self.c5 = LabelFrame(self.window,text='Analyzed lasers')
         
         self.console = Text(self.c2,background=self.DGRAY,fg='white',height=10,foreground='white')
-        self.console.grid(row=10,column=0,sticky='ews',columnspan=10)
+        self.console.grid(row=10,column=0,sticky='ews')
         
         self.canvas = Canvas(self.c5,bg=self.DGRAY)
         self.scrollbar_x = ttk.Scrollbar(self.c5, orient="horizontal", command=self.canvas.xview)
@@ -238,7 +247,13 @@ class App(CustomTk):
         self.button_frame = Frame(self.canvas,bg=self.DGRAY)
         
         self.frame_label = Label(self.c1)
-        self.spectrometr_image = Label(self.c3,text='No camera detected')
+        self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY)
+        self.spectrometr_canvas.pack(expand=True, fill=BOTH)
+        
+        self.original_image = Image.open("icon.ico")
+        self.image_tk = ImageTk.PhotoImage(self.original_image)
+        self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
+        self.scale = 1.0
         
         self.left = Button(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'), bg=self.RGRAY, fg='white')
         self.right = Button(self.c1,text='→',width=2,height=1,command=lambda :self.move('r'), bg=self.RGRAY, fg='white')
@@ -259,7 +274,6 @@ class App(CustomTk):
         self.origin.place(x=50,y=50)
         self.v.place(x=42,y=100)
         self.frame_label.place(x=0,y=0)
-        self.spectrometr_image.place(x=0,y=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.scrollbar_x.grid(row=1, column=0, sticky="ew")
         self.scrollbar_y.grid(row=0, column=1, sticky="ns")
@@ -286,7 +300,8 @@ class App(CustomTk):
             {"name": "Auto white balance", "status": StringVar(value="Pending")}
         ]
         
-        self.image = None        
+        self.image = None  
+        self.spec = None      
         self.connected = False
         self.calibrated = False
         
@@ -312,8 +327,32 @@ class App(CustomTk):
         self.draw_measurements()
         self.update_sizes()
         
+        self.spectrometr_canvas.bind("<MouseWheel>", self.zoom)
+        self.spectrometr_canvas.bind("<ButtonPress-1>", self.start_pan)
+        self.spectrometr_canvas.bind("<B1-Motion>", self.pan)
+        
+    def zoom(self, event):
+        if event.delta > 0 and self.scale < 2:
+            self.scale += 0.1
+        elif event.delta < 0 and self.scale > 0.5:
+            self.scale -= 0.1
+        new_width = int(self.original_image.width * self.scale)
+        new_height = int(self.original_image.height * self.scale)
+        resized_image = self.original_image.resize((new_width, new_height))
+        self.image_tk = ImageTk.PhotoImage(resized_image)
+
+        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+        self.spectrometr_canvas.configure(scrollregion=self.spectrometr_canvas.bbox("all"))
+
+    def start_pan(self, event):
+        self.spectrometr_canvas.scan_mark(event.x, event.y)
+
+    def pan(self, event):
+        self.spectrometr_canvas.scan_dragto(event.x, event.y, gain=1)
+        
     def console_data(self,f):
-        self.console.insert(INSERT, f'{(time.time()):.2f}: {f}\n')
+        readable_time = time.strftime('%H:%M:%S', time.localtime(time.time()))
+        self.console.insert(INSERT, f'{readable_time}: {f}\n')
         self.console.see("end")
 
     def create_task_list(self):
@@ -346,6 +385,7 @@ class App(CustomTk):
         frame_width = root_width // 2 -10
         frame_height = root_height // 4 -10
 
+        self.console.config(y=self.winfo_y()+frame_height-10,width=frame_width,height=10)
         self.c1.config(width=frame_width, height=frame_height*2)
         self.c2.config(width=frame_width, height=frame_height*2)
         self.c3.config(width=frame_width, height=frame_height)
@@ -404,8 +444,8 @@ class App(CustomTk):
         self.create_task_list()
         self.bind("<Configure>", lambda e: self.update_sizes())
         
-        Label(self.c1, text="Detected Movement Direction:").grid(row=0,column=0)
-        self.direction_label = Label(self.c1, textvariable=self.direction)
+        Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='white').grid(row=0,column=0)
+        self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='white')
         self.direction_label.grid(row=0,column=1)
 
     def start_camera(self):
@@ -414,6 +454,10 @@ class App(CustomTk):
         else:
             self.detector = None
         self.update_video_feed()
+    
+    def analize(self):
+        if self.spec:
+            algorithm = self.spec
         
     def start_spectrometr(self):
         frame = np.zeros([1088,2048], dtype=np.uint8)
@@ -429,8 +473,8 @@ class App(CustomTk):
             for i in range(1):            
                 ret = self.get_next_frame(hCamera, frame, 5)
                 print(frame.size)
-                image = Image.fromarray(frame)
-                image_tk = ImageTk.PhotoImage(image=image)
+                self.spec = Image.fromarray(frame)
+                image_tk = ImageTk.PhotoImage(image=self.spec)
                 self.spectrometr_image.configure(image=image_tk)
                 self.spectrometr_image.image = image_tk
 
@@ -542,8 +586,10 @@ class Options(CustomToplevel):
         Button(self.window, text="Import Settings", command=self.import_settings, bg=self.RGRAY, fg='white').pack(pady=10)
 
     def import_settings(self):
+        global config
         file_path = filedialog.askopenfilename(title="Select Settings File", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
         if file_path:
+            config = json.load(open(file_path))
             print(f"Importing settings from {file_path}")
         self.focus()
         
