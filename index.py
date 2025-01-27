@@ -61,16 +61,13 @@ class CustomWindow:
 
         ywin = ywin - starty
         xwin = xwin - startx
-
         
         def move_window(event):
             self.config(cursor="fleur")
             self.geometry(f'+{event.x_root + xwin}+{event.y_root + ywin}')
 
-
         def release_window(event):
             self.config(cursor="arrow")
-            
             
         self.title_bar.bind('<B1-Motion>', move_window)
         self.title_bar.bind('<ButtonRelease-1>', release_window)
@@ -243,11 +240,11 @@ class App(CustomTk):
         self.frame_label = Label(self.c1)
         self.spectrometr_image = Label(self.c3,text='No camera detected')
         
-        self.left = Button(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'))
-        self.right = Button(self.c1,text='→',width=2,height=1,command=lambda :self.move('r'))
-        self.up = Button(self.c1,text='↑',width=2,height=1,command=lambda :self.move('u'))
-        self.down = Button(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'))
-        self.origin = Button(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'))
+        self.left = Button(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'), bg=self.RGRAY, fg='white')
+        self.right = Button(self.c1,text='→',width=2,height=1,command=lambda :self.move('r'), bg=self.RGRAY, fg='white')
+        self.up = Button(self.c1,text='↑',width=2,height=1,command=lambda :self.move('u'), bg=self.RGRAY, fg='white')
+        self.down = Button(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'), bg=self.RGRAY, fg='white')
+        self.origin = Button(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'), bg=self.RGRAY, fg='white')
         self.v = Label(self.c1,text='x:0,y:0',background=self.DGRAY,fg='white',anchor='center')
         
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
@@ -494,7 +491,7 @@ class App(CustomTk):
         
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
-            Button(self.button_frame,text=f'{i}',command=lambda i=i, n=n: self.hotmap(i,n),width=2,height=1).grid(row=i // 40,column=i%40)
+            Button(self.button_frame,text=f'{i}',command=lambda i=i, n=n: self.hotmap(i,n),width=2,height=1, bg=self.RGRAY, fg='white').grid(row=i // 40,column=i%40)
         self.update_canvas()
         
 class HotmapWindow(CustomToplevel):
