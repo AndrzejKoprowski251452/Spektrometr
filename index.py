@@ -241,13 +241,13 @@ class App(CustomTk):
         self.console = Text(self.c2,background=self.DGRAY,fg='white',height=10,foreground='white')
         self.console.grid(row=10,column=0,sticky='ews')
         
-        self.canvas = Canvas(self.c5,bg=self.DGRAY)
+        self.canvas = Canvas(self.c5,bg=self.DGRAY,bd=0,highlightthickness=0)
         self.scrollbar_x = ttk.Scrollbar(self.c5, orient="horizontal", command=self.canvas.xview)
         self.scrollbar_y = ttk.Scrollbar(self.c5, orient="vertical", command=self.canvas.yview)
         self.button_frame = Frame(self.canvas,bg=self.DGRAY)
         
-        self.frame_label = Label(self.c1)
-        self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY)
+        self.frame_label = Label(self.c1,bd=0,highlightthickness=0)
+        self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY,bd=0,highlightthickness=0)
         self.spectrometr_canvas.pack(expand=True, fill=BOTH)
         
         self.original_image = Image.open("icon.ico")
@@ -283,6 +283,8 @@ class App(CustomTk):
         self.c5.grid_rowconfigure(0, weight=1)
         self.c5.grid_columnconfigure(0, weight=1)
         
+        self.cameraIndex=1
+        
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
@@ -294,10 +296,10 @@ class App(CustomTk):
         self.tasks = [
             {"name": "Camera 1", "status": StringVar(value="Pending")},
             {"name": "Camera 2", "status": StringVar(value="Pending")},
-            {"name": "Etalonu calibration", "status": StringVar(value="Pending")},
-            {"name": "Grid calibration", "status": StringVar(value="Pending")},
-            {"name": "Auto exposure", "status": StringVar(value="Pending")},
-            {"name": "Auto white balance", "status": StringVar(value="Pending")}
+            {"name": "Etalonu calibration", "status": StringVar(value="Not calibrated")},
+            {"name": "Grid calibration", "status": StringVar(value="Not calibrated")},
+            {"name": "Auto exposure", "status": StringVar(value="Not calibrated")},
+            {"name": "Auto white balance", "status": StringVar(value="Not calibrated")}
         ]
         
         self.image = None  
@@ -332,23 +334,20 @@ class App(CustomTk):
         self.spectrometr_canvas.bind("<B1-Motion>", self.pan)
         
     def zoom(self, event):
-        if event.delta > 0 and self.scale < 2:
+        if event.delta > 0 and self.scale < 4:
             self.scale += 0.1
         elif event.delta < 0 and self.scale > 0.5:
             self.scale -= 0.1
-        new_width = int(self.original_image.width * self.scale)
-        new_height = int(self.original_image.height * self.scale)
-        resized_image = self.original_image.resize((new_width, new_height))
-        self.image_tk = ImageTk.PhotoImage(resized_image)
-
-        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-        self.spectrometr_canvas.configure(scrollregion=self.spectrometr_canvas.bbox("all"))
 
     def start_pan(self, event):
         self.spectrometr_canvas.scan_mark(event.x, event.y)
 
     def pan(self, event):
         self.spectrometr_canvas.scan_dragto(event.x, event.y, gain=1)
+        
+    def cameraI(self,i):
+        self.cameraIndex=i
+        self.detector = MotionDetector(self.cameraIndex)
         
     def console_data(self,f):
         readable_time = time.strftime('%H:%M:%S', time.localtime(time.time()))
@@ -376,6 +375,36 @@ class App(CustomTk):
         task["status"].set("Completed")
 
     def show_task_options(self, task):
+        if task['name'] == "Camera 1":
+            c1=CustomToplevel(self)
+            for i in range(10):
+                try:
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        Button(c1.window,text=f'Camera {i}',command=lambda i=i:self.cameraI(i), bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='white', highlightthickness=0).pack(pady=5)
+                        cap.release()
+                except:
+                    break
+        elif task['name'] == "Camera 2":
+            ret = PxLApi.getNumberCameras()
+            c1=CustomToplevel(self)
+            if PxLApi.apiSuccess(ret[0]):
+                cameras = ret[1]
+                print ("Found %d Cameras:" % len(cameras))
+                for i in range(len(cameras)):
+                    Button(c1.window,text="  Serial number - %d" % cameras[i].CameraSerialNum,command=lambda i=i:self.cameraI(i), bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='white', highlightthickness=0).pack(pady=5)
+            if len(cameras) == 0:
+                Label(c1.window,text="No cameras found", bg=self.DGRAY, fg='white').pack(pady=5)
+        elif task['name'] == "Etalonu calibration":
+            pass
+        elif task['name'] == "Grid calibration":
+            pass
+        elif task['name'] == "Auto exposure":
+            ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.EXPOSURE)
+            assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
+        elif task['name'] == "Auto white balance":
+            ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.WHITE_SHADING)
+            assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
         print(f"Options for {task['name']}")
         
     def update_sizes(self):
@@ -450,7 +479,7 @@ class App(CustomTk):
 
     def start_camera(self):
         if not self.calibrated:
-            self.detector = MotionDetector()
+            self.detector = MotionDetector(self.cameraIndex)
         else:
             self.detector = None
         self.update_video_feed()
@@ -466,29 +495,29 @@ class App(CustomTk):
             print("Error: Unable to initialize a camera! rc = %i" % ret[0])
             return 1
 
-        hCamera = ret[1]
-        ret = PxLApi.setStreamState(hCamera, PxLApi.StreamState.START)
+        self.hCamera = ret[1]
+        ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
 
         if PxLApi.apiSuccess(ret[0]):
             for i in range(1):            
-                ret = self.get_next_frame(hCamera, frame, 5)
+                ret = self.get_next_frame(self.hCamera, frame, 5)
                 print(frame.size)
                 self.spec = Image.fromarray(frame)
                 image_tk = ImageTk.PhotoImage(image=self.spec)
                 self.spectrometr_image.configure(image=image_tk)
                 self.spectrometr_image.image = image_tk
 
-        PxLApi.setStreamState(hCamera, PxLApi.StreamState.STOP)
+        PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.STOP)
         assert PxLApi.apiSuccess(ret[0]), "setStreamState with StreamState.STOP failed"
 
-        PxLApi.uninitialize(hCamera)
+        PxLApi.uninitialize(self.hCamera)
         assert PxLApi.apiSuccess(ret[0]), "uninitialize failed"
         return 0
     
     def get_next_frame(self,hCamera, frame, maxNumberOfTries):
         ret = (PxLApi.ReturnCode.ApiUnknownError,)
         for i in range(maxNumberOfTries):
-            ret = PxLApi.getNextNumPyFrame(hCamera, frame)
+            ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
             if PxLApi.apiSuccess(ret[0]):
                 return ret
             else:
@@ -506,6 +535,13 @@ class App(CustomTk):
             if frame is not None:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.image = Image.fromarray(rgb_frame)
+                self.original_image = self.image
+                new_width = int(self.original_image.width * self.scale)
+                new_height = int(self.original_image.height * self.scale)
+                resized_image = self.original_image.resize((new_width, new_height))
+                self.image_tk = ImageTk.PhotoImage(resized_image)
+
+                self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
                 image_tk = ImageTk.PhotoImage(image=self.image)
                 self.frame_label.configure(image=image_tk)
                 self.frame_label.image = image_tk
