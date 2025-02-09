@@ -16,6 +16,10 @@ from libsonyapi.camera import Camera
 from libsonyapi.actions import Actions
 
 config = json.load(open('api.settings.json'))
+LGRAY = '#232323'
+DGRAY = '#161616'
+RGRAY = '#2c2c2c'
+MGRAY = '#1D1c1c'
 
 class SonyCamera:
     def __init__(self):
@@ -26,16 +30,16 @@ class SonyCamera:
 class CustomWindow:
     def __init__(self, *args, **kwargs):
         self.tk_title = "Custom Window"
-        self.LGRAY = '#424242'
-        self.DGRAY = '#242424'
-        self.RGRAY = '#444444'
-        self.MGRAY = '#333333'
+        self.LGRAY = LGRAY
+        self.DGRAY = DGRAY
+        self.RGRAY = RGRAY
+        self.MGRAY = MGRAY
 
         self.title_bar = Frame(self, bg=self.RGRAY, relief='raised', bd=0, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.MGRAY)
         
-        self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy, bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='white', highlightthickness=0)
-        self.minimize_button = Button(self.title_bar, text=' 🗕 ', command=self.minimize_me, bg=self.RGRAY, padx=2, pady=2, bd=0, fg='white', font=("calibri", 13), highlightthickness=0)
-        self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY, bd=0, fg='white', font=("helvetica", 10), highlightthickness=0)
+        self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy, bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='lightgray', highlightthickness=0)
+        self.minimize_button = Button(self.title_bar, text=' 🗕 ', command=self.minimize_me, bg=self.RGRAY, padx=2, pady=2, bd=0, fg='lightgray', font=("calibri", 13), highlightthickness=0)
+        self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY, bd=0, fg='lightgray', font=("helvetica", 10), highlightthickness=0)
         self.window = Frame(self, bg=self.DGRAY, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.MGRAY)
         
         self.title_bar.pack(fill=X)
@@ -60,7 +64,7 @@ class CustomWindow:
       
     def update_colors(self):  
         for w in self.window.winfo_children():
-            w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
+            w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
         
     def get_pos(self,event):
         xwin = self.winfo_x()
@@ -137,6 +141,8 @@ class CustomWindow:
             troughcolor=self.DGRAY,
             bordercolor=self.DGRAY,
             arrowcolor=self.DGRAY,
+            activebackground=self.DGRAY,
+            deactivebackground=self.DGRAY,
         )
         style.configure(
             "Vertical.TScrollbar",
@@ -147,9 +153,39 @@ class CustomWindow:
             troughcolor=self.DGRAY,
             bordercolor=self.DGRAY,
             arrowcolor=self.DGRAY,
+            activebackground=self.DGRAY,
+            deactivebackground=self.DGRAY,
         )
-        
 
+class CButton(Button):
+    def __init__(self, *args, **kwargs):
+        Button.__init__(self, *args, **kwargs)
+        self.config(
+            bg=RGRAY,
+            padx=2,
+            pady=2,
+            bd=0,
+            fg='lightgray',
+            highlightthickness=0,
+            relief='flat'
+        )
+        self.bind('<Enter>', self.on_enter)
+        self.bind('<Leave>', self.on_leave)
+        self.bind('<ButtonPress-1>', self.on_press)
+        self.bind('<ButtonRelease-1>', self.on_release)
+
+    def on_enter(self, event,color='gray'):
+        self.config(bg=color)
+
+    def on_leave(self, event):
+        self.config(bg=RGRAY)
+
+    def on_press(self, event):
+        self.config(relief='sunken')
+
+    def on_release(self, event):
+        self.config(relief='flat')
+        
 class CustomTk(Tk, CustomWindow):
     def __init__(self, *args, **kwargs):
         Tk.__init__(self, *args, **kwargs)
@@ -159,11 +195,11 @@ class CustomTk(Tk, CustomWindow):
         self.config(bg=self.DGRAY, highlightthickness=0)
         self.state('zoomed')
         self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
-        self.menu_button = Button(self.title_bar, text=' ≡ ', command=self.show_menu, bg=self.RGRAY, padx=2, pady=2, bd=0, fg='white', font=("calibri", 13), highlightthickness=0)
+        self.menu_button = CButton(self.title_bar, text=' ≡ ', command=self.show_menu)
         self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7, ipady=1)
         
         menu = Menu(self, tearoff=0)
-        menu.config(bg=self.DGRAY,fg='white',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white')
+        menu.config(bg=self.DGRAY,fg='lightgray',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white')
         menu.add_command(label="Options", command=lambda: Options(self))
         self.menu_bar = menu
         
@@ -238,7 +274,7 @@ class App(CustomTk):
         self.c4 = LabelFrame(self.window,text='Specterum')
         self.c5 = LabelFrame(self.window,text='Analyzed lasers')
         
-        self.console = Text(self.c2,background=self.DGRAY,fg='white',height=10,foreground='white')
+        self.console = Text(self.c2,background=self.DGRAY,fg='lightgray',height=10,foreground='white')
         self.console.grid(row=10,column=0,sticky='ews')
         
         self.canvas = Canvas(self.c5,bg=self.DGRAY,bd=0,highlightthickness=0)
@@ -255,12 +291,12 @@ class App(CustomTk):
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
         self.scale = 1.0
         
-        self.left = Button(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'), bg=self.RGRAY, fg='white')
-        self.right = Button(self.c1,text='→',width=2,height=1,command=lambda :self.move('r'), bg=self.RGRAY, fg='white')
-        self.up = Button(self.c1,text='↑',width=2,height=1,command=lambda :self.move('u'), bg=self.RGRAY, fg='white')
-        self.down = Button(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'), bg=self.RGRAY, fg='white')
-        self.origin = Button(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'), bg=self.RGRAY, fg='white')
-        self.v = Label(self.c1,text='x:0,y:0',background=self.DGRAY,fg='white',anchor='center')
+        self.left = CButton(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'))
+        self.right = CButton(self.c1,text='→',width=2,height=1,command=lambda :self.move('r'))
+        self.up = CButton(self.c1,text='↑',width=2,height=1,command=lambda :self.move('u'))
+        self.down = CButton(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'))
+        self.origin = CButton(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'))
+        self.v = Label(self.c1,text='x:0,y:0',background=self.DGRAY,fg='lightgray',anchor='center')
         
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -359,15 +395,15 @@ class App(CustomTk):
             frame = Frame(self.c2, bg=self.DGRAY)
             frame.grid(row=i, column=0, sticky="ew", pady=5)
 
-            label = Label(frame, text=task["name"], bg=self.DGRAY, fg='white')
+            label = Label(frame, text=task["name"], bg=self.DGRAY, fg='lightgray')
             label.grid(row=0, column=0, padx=10)
             status_label = Label(frame, textvariable=task["status"], bg=self.DGRAY, fg='red')
             status_label.grid(row=0, column=1, padx=10)
 
-            complete_button = Button(frame, text="Complete", command=lambda t=task, sl=status_label: self.complete_task(t, sl), bg=self.RGRAY, fg='white')
+            complete_button = CButton(frame, text="Complete", command=lambda t=task, sl=status_label: self.complete_task(t, sl))
             complete_button.grid(row=0, column=2, padx=10)
 
-            options_button = Button(frame, text="Options", command=lambda t=task: self.show_task_options(t), bg=self.RGRAY, fg='white')
+            options_button = CButton(frame, text="Options", command=lambda t=task: self.show_task_options(t))
             options_button.grid(row=0, column=3, padx=10)
 
     def complete_task(self, task,status_label):
@@ -377,24 +413,26 @@ class App(CustomTk):
     def show_task_options(self, task):
         if task['name'] == "Camera 1":
             c1=CustomToplevel(self)
+            c1.set_title("Camera 1 settings")
             for i in range(10):
                 try:
                     cap = cv2.VideoCapture(i)
                     if cap.isOpened():
-                        Button(c1.window,text=f'Camera {i}',command=lambda i=i:self.cameraI(i), bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='white', highlightthickness=0).pack(pady=5)
+                        Button(c1.window,text=f'Camera {i}',command=lambda i=i:self.cameraI(i)).pack(pady=5)
                         cap.release()
                 except:
                     break
         elif task['name'] == "Camera 2":
             ret = PxLApi.getNumberCameras()
             c1=CustomToplevel(self)
+            c1.set_title("Camera 2 settings")
             if PxLApi.apiSuccess(ret[0]):
                 cameras = ret[1]
                 print ("Found %d Cameras:" % len(cameras))
                 for i in range(len(cameras)):
-                    Button(c1.window,text="  Serial number - %d" % cameras[i].CameraSerialNum,command=lambda i=i:self.cameraI(i), bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='white', highlightthickness=0).pack(pady=5)
+                    Button(c1.window,text="  Serial number - %d" % cameras[i].CameraSerialNum,command=lambda i=i:self.cameraI(i)).pack(pady=5)
             if len(cameras) == 0:
-                Label(c1.window,text="No cameras found", bg=self.DGRAY, fg='white').pack(pady=5)
+                Label(c1.window,text="No cameras found", bg=self.DGRAY, fg='lightgray').pack(pady=5)
         elif task['name'] == "Etalonu calibration":
             pass
         elif task['name'] == "Grid calibration":
@@ -473,8 +511,8 @@ class App(CustomTk):
         self.create_task_list()
         self.bind("<Configure>", lambda e: self.update_sizes())
         
-        Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='white').grid(row=0,column=0)
-        self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='white')
+        Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='lightgray').grid(row=0,column=0)
+        self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='lightgray')
         self.direction_label.grid(row=0,column=1)
 
     def start_camera(self):
@@ -486,7 +524,18 @@ class App(CustomTk):
     
     def analize(self):
         if self.spec:
-            algorithm = self.spec
+            f=1
+            W=1
+            x=1
+            F=1
+            R=1
+            r=1
+            k=1
+            theta=1
+            I=1
+            t=1
+            lambda_ = np.pi/np.arcsin(np.sqrt((I*np.exp((-2*f**2*x**2)/(W**2*F**2))-(1-R*r)**2/(4*R*r))))/(2*t*np.cos(theta)-(2*t*np.sin(theta)*x)/F-(t*np.cos(theta)*x**2)/F**2)
+            return lambda_
         
     def start_spectrometr(self):
         frame = np.zeros([1088,2048], dtype=np.uint8)
@@ -571,7 +620,7 @@ class App(CustomTk):
         
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
-            Button(self.button_frame,text=f'{i}',command=lambda i=i, n=n: self.hotmap(i,n),width=2,height=1, bg=self.RGRAY, fg='white').grid(row=i // 40,column=i%40)
+            CButton(self.button_frame,text=f'{i}',command=lambda i=i, n=n: self.hotmap(i,n),width=2,height=1).grid(row=i // 40,column=i%40)
         self.update_canvas()
         
 class HotmapWindow(CustomToplevel):
@@ -613,13 +662,13 @@ class Options(CustomToplevel):
 
         self.create_options()
         for w in self.winfo_children():
-            w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
+            w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
             for w in w.winfo_children():
-                w.config(bg=self.DGRAY,fg='white',highlightbackground='white')
+                w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
 
     def create_options(self):
-        Label(self.window, text=f"Options for {1}", bg=self.DGRAY, fg='white').pack(pady=10)
-        Button(self.window, text="Import Settings", command=self.import_settings, bg=self.RGRAY, fg='white').pack(pady=10)
+        Label(self.window, text=f"Options for {1}", bg=self.DGRAY, fg='lightgray').pack(pady=10)
+        CButton(self.window, text="Import Settings", command=self.import_settings).pack(pady=10)
 
     def import_settings(self):
         global config
