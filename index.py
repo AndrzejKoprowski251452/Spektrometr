@@ -14,6 +14,14 @@ import time
 import json
 from libsonyapi.camera import Camera
 from libsonyapi.actions import Actions
+from PIL import ImageDraw
+import matplotlib.colors as mcolors
+
+def get_color_gradient(n):
+    colors = list(mcolors.TABLEAU_COLORS.values())
+    gradient = [colors[i % len(colors)] for i in range(n)]
+    return gradient
+import numpy as np
 
 config = json.load(open('api.settings.json'))
 LGRAY = '#232323'
@@ -266,7 +274,7 @@ class App(CustomTk):
         self.set_title("Arczy Puszka")
         self.iconbitmap("icon.ico")
         
-        sys.stdout = StreamToFunction(self.console_data)
+        #sys.stdout = StreamToFunction(self.console_data)
 
         self.c1 = LabelFrame(self.window,text='Camera')
         self.c2 = LabelFrame(self.window,text='Controls')
@@ -286,7 +294,7 @@ class App(CustomTk):
         self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY,bd=0,highlightthickness=0)
         self.spectrometr_canvas.pack(expand=True, fill=BOTH)
         
-        self.original_image = Image.open("icon.ico")
+        self.original_image = Image.open("Image.bmp")
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
         self.scale = 1.0
@@ -444,6 +452,38 @@ class App(CustomTk):
             ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.WHITE_SHADING)
             assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
         print(f"Options for {task['name']}")
+    
+    def draw_lines_on_image(self):
+        if self.original_image is not None:
+            image_array = np.array(self.original_image)
+            
+            if len(image_array.shape) == 3 and image_array.shape[2] == 4:
+                gray_image = cv2.cvtColor(image_array, cv2.COLOR_RGBA2GRAY)
+            elif len(image_array.shape) == 3 and image_array.shape[2] == 3:
+                gray_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+            else:
+                gray_image = image_array
+            gray_image = cv2.GaussianBlur(gray_image, (13, 13), 0)
+            gray_image = (gray_image > 33).astype(np.uint8) * 255
+            kernel = np.ones((20,20), np.uint8)
+            dist = cv2.distanceTransform(gray_image, distanceType=cv2.DIST_L2, maskSize=5)
+
+            # set up cross for tophat skeletonization
+            kernel = cv2.getStructuringElement(cv2.MORPH_CROSS,(3,3))
+            skeleton = cv2.morphologyEx(dist, cv2.MORPH_TOPHAT, kernel)
+
+            # threshold skeleton
+            ret, skeleton = cv2.threshold(skeleton,0,255,0)
+            #skeleton = cv2.GaussianBlur(skeleton, (11, 11), 0)
+            #skeleton = (skeleton > 31).astype(np.uint8) * 255
+            #skeleton = cv2.morphologyEx(cv2.GaussianBlur(skeleton, (11, 11), 0), cv2.MORPH_TOPHAT, kernel)
+            #skeleton = cv2.threshold(skeleton,0,255,0)[1]
+            self.image_tk = ImageTk.PhotoImage(Image.fromarray(skeleton))
+            new_width = int(self.original_image.width * self.scale)
+            new_height = int(self.original_image.height * self.scale)
+            resized_image = self.original_image.resize((new_width, new_height))
+            #self.image_tk = ImageTk.PhotoImage(resized_image)
+            self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
         
     def update_sizes(self):
         root_width = self.window.winfo_width()
@@ -550,11 +590,9 @@ class App(CustomTk):
         if PxLApi.apiSuccess(ret[0]):
             for i in range(1):            
                 ret = self.get_next_frame(self.hCamera, frame, 5)
-                print(frame.size)
                 self.spec = Image.fromarray(frame)
                 image_tk = ImageTk.PhotoImage(image=self.spec)
-                self.spectrometr_image.configure(image=image_tk)
-                self.spectrometr_image.image = image_tk
+                self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=image_tk)
 
         PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.STOP)
         assert PxLApi.apiSuccess(ret[0]), "setStreamState with StreamState.STOP failed"
@@ -584,7 +622,7 @@ class App(CustomTk):
             if frame is not None:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.image = Image.fromarray(rgb_frame)
-                self.original_image = self.image
+                # self.original_image = self.image
                 new_width = int(self.original_image.width * self.scale)
                 new_height = int(self.original_image.height * self.scale)
                 resized_image = self.original_image.resize((new_width, new_height))
@@ -594,6 +632,7 @@ class App(CustomTk):
                 image_tk = ImageTk.PhotoImage(image=self.image)
                 self.frame_label.configure(image=image_tk)
                 self.frame_label.image = image_tk
+                self.draw_lines_on_image()
 
             if direction:
                 self.direction.set(f"Movement: {direction}")
