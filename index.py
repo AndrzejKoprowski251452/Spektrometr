@@ -12,261 +12,9 @@ import matplotlib.pyplot as plt
 import serial.tools.list_ports
 import time
 import json
-from libsonyapi.camera import Camera
-from libsonyapi.actions import Actions
 from PIL import ImageDraw
 import matplotlib.colors as mcolors
-
-def get_color_gradient(n):
-    colors = list(mcolors.TABLEAU_COLORS.values())
-    gradient = [colors[i % len(colors)] for i in range(n)]
-    return gradient
-import numpy as np
-
-config = json.load(open('api.settings.json'))
-LGRAY = '#232323'
-DGRAY = '#161616'
-RGRAY = '#2c2c2c'
-MGRAY = '#1D1c1c'
-
-class SonyCamera:
-    def __init__(self):
-        self.camera = Camera()
-        self.actions = Actions(self.camera)
-        self.camera.startLiveview()
-
-class CustomWindow:
-    def __init__(self, *args, **kwargs):
-        self.tk_title = "Custom Window"
-        self.LGRAY = LGRAY
-        self.DGRAY = DGRAY
-        self.RGRAY = RGRAY
-        self.MGRAY = MGRAY
-
-        self.title_bar = Frame(self, bg=self.RGRAY, relief='raised', bd=0, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.MGRAY)
-        
-        self.close_button = Button(self.title_bar, text='  ×  ', command=self.destroy, bg=self.RGRAY, padx=2, pady=2, font=("calibri", 13), bd=0, fg='lightgray', highlightthickness=0)
-        self.minimize_button = Button(self.title_bar, text=' 🗕 ', command=self.minimize_me, bg=self.RGRAY, padx=2, pady=2, bd=0, fg='lightgray', font=("calibri", 13), highlightthickness=0)
-        self.title_bar_title = Label(self.title_bar, text=self.tk_title, bg=self.RGRAY, bd=0, fg='lightgray', font=("helvetica", 10), highlightthickness=0)
-        self.window = Frame(self, bg=self.DGRAY, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.MGRAY)
-        
-        self.title_bar.pack(fill=X)
-        self.title_bar_title.pack(side=LEFT, padx=10)
-        self.close_button.pack(side=RIGHT, ipadx=7, ipady=1)
-        self.minimize_button.pack(side=RIGHT, ipadx=7, ipady=1)
-        self.window.pack(expand=1, fill=BOTH)
-        
-        self.title_bar.bind('<Button-1>', self.get_pos)
-        self.title_bar_title.bind('<Button-1>', self.get_pos)
-
-        self.close_button.bind('<Enter>', lambda e: self.changex_on_hovering())
-        self.close_button.bind('<Leave>', lambda e: self.returnx_to_normalstate())
-        self.minimize_button.bind('<Enter>', lambda e: self.change__on_hovering())
-        self.minimize_button.bind('<Leave>', lambda e: self.return__to_normalstate())
-        
-        self.custom_scroll()
-        
-        if self.winfo_class() == 'Tk':
-            self.bind("<Expose>", lambda e: self.deminimize())
-        self.after(10, lambda: self.set_appwindow())
-      
-    def update_colors(self):  
-        for w in self.window.winfo_children():
-            w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
-        
-    def get_pos(self,event):
-        xwin = self.winfo_x()
-        ywin = self.winfo_y()
-        startx = event.x_root
-        starty = event.y_root
-
-        ywin = ywin - starty
-        xwin = xwin - startx
-        
-        def move_window(event):
-            self.config(cursor="fleur")
-            self.geometry(f'+{event.x_root + xwin}+{event.y_root + ywin}')
-
-        def release_window(event):
-            self.config(cursor="arrow")
-            
-        self.title_bar.bind('<B1-Motion>', move_window)
-        self.title_bar.bind('<ButtonRelease-1>', release_window)
-        self.title_bar_title.bind('<B1-Motion>', move_window)
-        self.title_bar_title.bind('<ButtonRelease-1>', release_window)
-
-    def set_appwindow(self): 
-        GWL_EXSTYLE = -20
-        WS_EX_APPWINDOW = 0x00040000
-        WS_EX_TOOLWINDOW = 0x00000080
-        hwnd = windll.user32.GetParent(self.winfo_id())
-        stylew = windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        stylew = stylew & ~WS_EX_TOOLWINDOW
-        stylew = stylew | WS_EX_APPWINDOW
-        res = windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, stylew)
-    
-        self.wm_withdraw()
-        self.after(10, lambda: self.wm_deiconify())
-        self.update()
-        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
-        
-    def minimize_me(self):
-        self.overrideredirect(False)
-        self.attributes('-alpha',0)
-        self.wm_state('iconic')
-        
-    def deminimize(self):
-        self.overrideredirect(True)
-        self.attributes('-alpha',1)
-        self.wm_state('zoomed')
-
-    def changex_on_hovering(self):
-        self.close_button['bg']='red'
-        
-    def returnx_to_normalstate(self):
-        self.close_button['bg']=self.RGRAY
-        
-    def change__on_hovering(self):
-        self.minimize_button['bg']='gray'
-        
-    def return__to_normalstate(self):
-        self.minimize_button['bg']=self.RGRAY
-        
-    def set_title(self, title):
-        self.tk_title = title
-        self.title_bar_title.config(text=self.tk_title)
-        self.title(self.tk_title)
-        
-    def custom_scroll(self):
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure(
-            "Horizontal.TScrollbar",
-            gripcount=0,
-            background=self.LGRAY,
-            darkcolor=self.DGRAY,
-            lightcolor=self.DGRAY,
-            troughcolor=self.DGRAY,
-            bordercolor=self.DGRAY,
-            arrowcolor=self.DGRAY,
-            activebackground=self.DGRAY,
-            deactivebackground=self.DGRAY,
-        )
-        style.configure(
-            "Vertical.TScrollbar",
-            gripcount=0,
-            background=self.LGRAY,
-            darkcolor=self.DGRAY,
-            lightcolor=self.DGRAY,
-            troughcolor=self.DGRAY,
-            bordercolor=self.DGRAY,
-            arrowcolor=self.DGRAY,
-            activebackground=self.DGRAY,
-            deactivebackground=self.DGRAY,
-        )
-
-class CButton(Button):
-    def __init__(self, *args, **kwargs):
-        Button.__init__(self, *args, **kwargs)
-        self.config(
-            bg=RGRAY,
-            padx=2,
-            pady=2,
-            bd=0,
-            fg='lightgray',
-            highlightthickness=0,
-            relief='flat'
-        )
-        self.bind('<Enter>', self.on_enter)
-        self.bind('<Leave>', self.on_leave)
-        self.bind('<ButtonPress-1>', self.on_press)
-        self.bind('<ButtonRelease-1>', self.on_release)
-
-    def on_enter(self, event,color='gray'):
-        self.config(bg=color)
-
-    def on_leave(self, event):
-        self.config(bg=RGRAY)
-
-    def on_press(self, event):
-        self.config(relief='sunken')
-
-    def on_release(self, event):
-        self.config(relief='flat')
-        
-class CustomTk(Tk, CustomWindow):
-    def __init__(self, *args, **kwargs):
-        Tk.__init__(self, *args, **kwargs)
-        CustomWindow.__init__(self, *args, **kwargs)
-        self.tk_title = "Arczy Puszka"
-        self.overrideredirect(True)
-        self.config(bg=self.DGRAY, highlightthickness=0)
-        self.state('zoomed')
-        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
-        self.menu_button = CButton(self.title_bar, text=' ≡ ', command=self.show_menu)
-        self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7, ipady=1)
-        
-        menu = Menu(self, tearoff=0)
-        menu.config(bg=self.DGRAY,fg='lightgray',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white')
-        menu.add_command(label="Options", command=lambda: Options(self))
-        self.menu_bar = menu
-        
-    def show_menu(self):
-        self.menu_bar.post(self.menu_button.winfo_rootx(), self.menu_button.winfo_rooty() + self.menu_button.winfo_height())
-
-
-class CustomToplevel(Toplevel, CustomWindow):
-    def __init__(self, *args, **kwargs):
-        Toplevel.__init__(self, *args, **kwargs)
-        CustomWindow.__init__(self, *args, **kwargs)
-        self.overrideredirect(True)
-        self.config(bg=self.DGRAY, highlightthickness=0)
-        
-class StreamToFunction:
-    def __init__(self, func):
-        self.func = func
-
-    def write(self, message):
-        if message.strip():
-            self.func(message)
-    def flush(self):
-        pass
-
-class MotionDetector:
-    def __init__(self, video_source=1):
-        self.cap = cv2.VideoCapture(video_source, cv2.CAP_DSHOW)
-        self.prev_frame = None
-
-    def detect_movement_direction(self):
-        ret, frame = self.cap.read()
-        frame = cv2.flip(frame,1)
-        if not ret:
-            return None, None
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if self.prev_frame is None:
-            self.prev_frame = gray
-            return None, frame
-
-        flow = cv2.calcOpticalFlowFarneback(
-            self.prev_frame, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0
-        )
-        self.prev_frame = gray
-
-        mean_flow = np.mean(flow, axis=(0, 1))
-        magnitude = np.linalg.norm(mean_flow)
-
-        if magnitude < 0.1:
-            return "No significant movement", frame
-        if abs(mean_flow[0]) > abs(mean_flow[1]):
-            direction = 'Right' if mean_flow[0] > 0 else 'Left'
-        else:
-            direction = 'Down' if mean_flow[1] > 0 else 'Up'
-        
-        return direction, frame
-
-    def release(self):
-        self.cap.release()
+from addons import *
 
 class App(CustomTk):
     def __init__(self, *args, **kwargs):
@@ -297,6 +45,7 @@ class App(CustomTk):
         self.original_image = Image.open("Image.bmp")
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
+        self.image_tk = None
         self.scale = 1.0
         
         self.left = CButton(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'))
@@ -352,10 +101,10 @@ class App(CustomTk):
         self.calibrated = False
         
         self.ports = []
-        if len(list(serial.tools.list_ports.comports())) != 0 and 'COM' in list(serial.tools.list_ports.comports()):
+        if len(list(serial.tools.list_ports.comports())) != 0 and any(['COM' in p[0] for p in serial.tools.list_ports.comports()]):
             self.connected = True
-            for i in list(serial.tools.list_ports.comports()):
-                s = serial.Serial(str(i)[:4])
+            for i in serial.tools.list_ports.comports():
+                s = serial.Serial(i[0])
                 s.baudrate=9600
                 s.BYTESIZES=serial.EIGHTBITS
                 s.PARITIES=serial.PARITY_NONE
@@ -367,6 +116,9 @@ class App(CustomTk):
             print(self.ports[0].readlines())
         else:
             self.connected = False
+                    
+        self.step_x = IntVar(value=100)
+        self.step_y = IntVar(value=100)
         
         self.update_colors()
         self.create_widgets()
@@ -452,9 +204,9 @@ class App(CustomTk):
             ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.WHITE_SHADING)
             assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
         print(f"Options for {task['name']}")
-    
+
     def draw_lines_on_image(self):
-        if self.original_image is not None:
+        if self.image_tk is None:
             image_array = np.array(self.original_image)
             
             if len(image_array.shape) == 3 and image_array.shape[2] == 4:
@@ -464,25 +216,28 @@ class App(CustomTk):
             else:
                 gray_image = image_array
             gray_image = cv2.GaussianBlur(gray_image, (13, 13), 0)
-            gray_image = (gray_image > 33).astype(np.uint8) * 255
-            kernel = np.ones((20,20), np.uint8)
-            dist = cv2.distanceTransform(gray_image, distanceType=cv2.DIST_L2, maskSize=5)
+            gray_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            #gray_image = (gray_image > 33).astype(np.uint8) * 255
 
-            # set up cross for tophat skeletonization
-            kernel = cv2.getStructuringElement(cv2.MORPH_CROSS,(3,3))
-            skeleton = cv2.morphologyEx(dist, cv2.MORPH_TOPHAT, kernel)
-
-            # threshold skeleton
-            ret, skeleton = cv2.threshold(skeleton,0,255,0)
-            #skeleton = cv2.GaussianBlur(skeleton, (11, 11), 0)
-            #skeleton = (skeleton > 31).astype(np.uint8) * 255
-            #skeleton = cv2.morphologyEx(cv2.GaussianBlur(skeleton, (11, 11), 0), cv2.MORPH_TOPHAT, kernel)
-            #skeleton = cv2.threshold(skeleton,0,255,0)[1]
-            self.image_tk = ImageTk.PhotoImage(Image.fromarray(skeleton))
-            new_width = int(self.original_image.width * self.scale)
-            new_height = int(self.original_image.height * self.scale)
-            resized_image = self.original_image.resize((new_width, new_height))
-            #self.image_tk = ImageTk.PhotoImage(resized_image)
+            grad = cv2.Sobel(gray_image, cv2.CV_8U, 1, 0, ksize=5)
+            grad = cv2.morphologyEx(grad, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), grad)
+            line_image = np.zeros_like(grad)
+            contours, _ = cv2.findContours(grad, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for contour in contours:
+                if len(contour) > 0:
+                    rect = cv2.minAreaRect(contour)
+                    box = cv2.boxPoints(rect)
+                    box = np.int32(box)
+                    #cv2.drawContours(line_image, [box], 0, (150), 1)
+                    x1 = (box[0][0] + box[3][0]) // 2
+                    y1 = (box[0][1] + box[3][1]) // 2
+                    x2 = (box[1][0] + box[2][0]) // 2
+                    y2 = (box[1][1] + box[2][1]) // 2
+                    cv2.line(line_image, (x1,y1), (x2,y2), (255), 1)
+            img = Image.fromarray(line_image)
+            img = img.resize((int(self.original_image.width*self.scale), int(self.original_image.height*self.scale)))
+            self.image_tk = ImageTk.PhotoImage(img)
+            self.oryginal_image = img
             self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
         
     def update_sizes(self):
@@ -515,24 +270,30 @@ class App(CustomTk):
             s = s.split(':')
             self.move(s[0],s[1])
         
-    def move(self,dir,step=100):
+    def move(self, dir, step=None):
+        if step is None:
+            step_x = self.step_x.get()
+            step_y = self.step_y.get()
+        else:
+            step_x = step_y = step
+
         self.measurements.append(len(self.measurements))
         self.draw_measurements()
         if self.connected:
             if dir == 'r':
-                self.ports[0].write((f"M:1+P{step}\r\n").encode())
+                self.ports[0].write((f"M:1+P{step_x}\r\n").encode())
                 time.sleep(1)
                 self.ports[0].write('G:\r\n'.encode())
             elif dir == 'l':
-                self.ports[0].write((f"M:1-P{-step}\r\n").encode())
+                self.ports[0].write((f"M:1-P{step_x}\r\n").encode())
                 time.sleep(1)
                 self.ports[0].write('G:\r\n'.encode())
             elif dir == 'u':
-                self.ports[1].write((f"M:1+P{step}\r\n").encode())
+                self.ports[1].write((f"M:1+P{step_y}\r\n").encode())
                 time.sleep(1)
                 self.ports[1].write('G:\r\n'.encode())
             elif dir == 'd':
-                self.ports[1].write((f"M:1-P{-step}\r\n").encode())
+                self.ports[1].write((f"M:1-P{step_y}\r\n").encode())
                 time.sleep(1)
                 self.ports[1].write('G:\r\n'.encode())
             elif dir == 'o':
@@ -554,6 +315,14 @@ class App(CustomTk):
         Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='lightgray').grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='lightgray')
         self.direction_label.grid(row=0,column=1)
+        
+        Label(self.c1, text="Step X:", background=self.DGRAY, fg='lightgray').place(x=10, y=130)
+        self.step_x_entry = Entry(self.c1, textvariable=self.step_x, width=5)
+        self.step_x_entry.place(x=60, y=130)
+        
+        Label(self.c1, text="Step Y:", background=self.DGRAY, fg='lightgray').place(x=10, y=160)
+        self.step_y_entry = Entry(self.c1, textvariable=self.step_y, width=5)
+        self.step_y_entry.place(x=60, y=160)
 
     def start_camera(self):
         if not self.calibrated:
@@ -622,17 +391,15 @@ class App(CustomTk):
             if frame is not None:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.image = Image.fromarray(rgb_frame)
-                # self.original_image = self.image
-                new_width = int(self.original_image.width * self.scale)
-                new_height = int(self.original_image.height * self.scale)
-                resized_image = self.original_image.resize((new_width, new_height))
+                resized_image = self.original_image.resize((int(self.original_image.width * self.scale),int(self.original_image.height * self.scale)))
                 self.image_tk = ImageTk.PhotoImage(resized_image)
 
                 self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
                 image_tk = ImageTk.PhotoImage(image=self.image)
                 self.frame_label.configure(image=image_tk)
                 self.frame_label.image = image_tk
-                self.draw_lines_on_image()
+                if self.image_tk == None:
+                    self.draw_lines_on_image()
 
             if direction:
                 self.direction.set(f"Movement: {direction}")
@@ -640,9 +407,7 @@ class App(CustomTk):
         self.after(10, self.update_video_feed)
     def calibrate(self):
         pass
-    def hotmap(self,i,n):
-        HotmapWindow(self, i, n, self.image)
-  
+    
     def spectrum(self):
         fig, ax = plt.subplots(figsize=(5, 2),facecolor=self.DGRAY)
         ax.set_facecolor(self.DGRAY)
@@ -659,64 +424,9 @@ class App(CustomTk):
         
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
-            CButton(self.button_frame,text=f'{i}',command=lambda i=i, n=n: self.hotmap(i,n),width=2,height=1).grid(row=i // 40,column=i%40)
+            CButton(self.button_frame,text=f'{i}',command=lambda i=i, n=n: HotmapWindow(self,i,n,self.image),width=2,height=1).grid(row=i // 40,column=i%40)
         self.update_canvas()
-        
-class HotmapWindow(CustomToplevel):
-    def __init__(self, parent, i, n, image):
-        CustomToplevel.__init__(self, parent)
-        self.set_title(f'{i}')
 
-        x = np.arange(0, image.width, 1)
-        y = np.arange(0, image.height, 1)
-        X, Y = np.meshgrid(x, y)
-        Z1 = np.cos(X)
-        Z2 = np.sin(Y)
-        data = (Z1 - Z2) * 2
-        fig, ax = plt.subplots(figsize=(5, 5), facecolor=self.DGRAY)
-        norm = Normalize(vmin=np.min(data), vmax=np.max(data))
-        cax = ax.imshow(data, cmap='hot', norm=norm)
-        ax.set_xlabel('Oś X', color='white')
-        ax.set_ylabel('Oś Y', color='white') 
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        cbar = fig.colorbar(cax, ax=ax, orientation='vertical')
-        cbar.set_ticks(cbar.get_ticks())
-        cbar.ax.tick_params(labelcolor='white')
-        img = image
-        ax.imshow(img, alpha=0.5)
-        canvas = FigureCanvasTkAgg(fig, master=self.window)
-        canvas.draw()
-        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-        self.update_idletasks()
-        plot_width = canvas.get_tk_widget().winfo_width()
-        plot_height = canvas.get_tk_widget().winfo_height()
-        self.geometry(f"{plot_width}x{plot_height + self.title_bar.winfo_height()}")
-
-class Options(CustomToplevel):
-    def __init__(self, parent):
-        CustomToplevel.__init__(self, parent)
-        self.geometry('500x400')
-        self.set_title("Options")
-
-        self.create_options()
-        for w in self.winfo_children():
-            w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
-            for w in w.winfo_children():
-                w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
-
-    def create_options(self):
-        Label(self.window, text=f"Options for {1}", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        CButton(self.window, text="Import Settings", command=self.import_settings).pack(pady=10)
-
-    def import_settings(self):
-        global config
-        file_path = filedialog.askopenfilename(title="Select Settings File", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
-        if file_path:
-            config = json.load(open(file_path))
-            print(f"Importing settings from {file_path}")
-        self.focus()
-        
 if __name__ == "__main__":
     app = App()
     app.mainloop()
