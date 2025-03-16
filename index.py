@@ -22,7 +22,7 @@ class App(CustomTk):
         self.set_title("Arczy Puszka")
         self.iconbitmap("icon.ico")
         
-        #sys.stdout = StreamToFunction(self.console_data)
+        sys.stdout = StreamToFunction(self.console_data)
 
         self.c1 = LabelFrame(self.window,text='Camera')
         self.c2 = LabelFrame(self.window,text='Controls')
@@ -42,7 +42,7 @@ class App(CustomTk):
         self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY,bd=0,highlightthickness=0)
         self.spectrometr_canvas.pack(expand=True, fill=BOTH)
         
-        self.original_image = Image.open("Image.bmp")
+        self.original_image = Image.open("1.bmp")
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
         self.image_tk = None
@@ -204,6 +204,29 @@ class App(CustomTk):
             ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.WHITE_SHADING)
             assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
         print(f"Options for {task['name']}")
+        
+    def find_mods(self):
+        self.original_image = Image.open("7.bmp")
+        img = np.array(self.original_image.convert('L'))
+        _, thresh = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        points = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            mask = np.zeros_like(img)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+            mean_val = 1/(cv2.mean(img, mask=mask)[0]/(w*h))
+
+            cv2.rectangle(img_color, (x, y), (x + w, y + h), (0, 255, 0), 1)
+            #cv2.line(img_color, (x + w // 2, 0), (x + w // 2, img_color.shape[0]), (0, 255, 0), 2)
+            cv2.putText(img_color, f'{mean_val:.2f}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            points.append((x + w // 2, mean_val))
+
+        self.original_image = Image.fromarray(img_color)
+        self.image_tk = ImageTk.PhotoImage(self.original_image)
+        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+        return points
 
     def draw_lines_on_image(self):
         if self.image_tk is None:
@@ -217,28 +240,71 @@ class App(CustomTk):
                 gray_image = image_array
             gray_image = cv2.GaussianBlur(gray_image, (13, 13), 0)
             gray_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            #gray_image = (gray_image > 33).astype(np.uint8) * 255
 
             grad = cv2.Sobel(gray_image, cv2.CV_8U, 1, 0, ksize=5)
             grad = cv2.morphologyEx(grad, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), grad)
             line_image = np.zeros_like(grad)
             contours, _ = cv2.findContours(grad, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            line_positions = []
             for contour in contours:
                 if len(contour) > 0:
                     rect = cv2.minAreaRect(contour)
                     box = cv2.boxPoints(rect)
                     box = np.int32(box)
-                    #cv2.drawContours(line_image, [box], 0, (150), 1)
                     x1 = (box[0][0] + box[3][0]) // 2
                     y1 = (box[0][1] + box[3][1]) // 2
                     x2 = (box[1][0] + box[2][0]) // 2
                     y2 = (box[1][1] + box[2][1]) // 2
-                    cv2.line(line_image, (x1,y1), (x2,y2), (255), 1)
+                    cv2.line(line_image, (x1, y1), (x2, y2), (255), 1)
+                    line_positions.append((x1, y1, x2, y2))
             img = Image.fromarray(line_image)
-            img = img.resize((int(self.original_image.width*self.scale), int(self.original_image.height*self.scale)))
+            img = img.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
             self.image_tk = ImageTk.PhotoImage(img)
-            self.oryginal_image = img
+            self.original_image = img
             self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+            return line_positions
+        return []
+
+    def map_lines_to_spectrum(self, points):
+        fig, ax = plt.subplots(figsize=(5, 2), facecolor=self.DGRAY)
+        ax.set_facecolor(self.DGRAY)
+        x = np.linspace(0, 2048, 2048)
+        y = np.zeros(2048)
+        if points:
+            for i in range(2048):
+                if any(p[0] == i for p in points):
+                    y[i] = next(p[1] for p in points if p[0] == i)
+        ax.plot(x, y, color='darkgreen')
+        ax.grid()
+        ax.tick_params(axis='x', colors='white')
+        ax.tick_params(axis='y', colors='white')
+        canvas = FigureCanvasTkAgg(fig, master=self.c4)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=X, expand=True)
+        plt.tight_layout()
+
+    def update_video_feed(self):
+        if self.detector:
+            direction, frame = self.detector.detect_movement_direction()
+
+            if frame is not None:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self.image = Image.fromarray(rgb_frame)
+                resized_image = self.original_image.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
+                self.image_tk = ImageTk.PhotoImage(resized_image)
+
+                self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+                image_tk = ImageTk.PhotoImage(image=self.image)
+                self.frame_label.configure(image=image_tk)
+                self.frame_label.image = image_tk
+                if self.image_tk is None:
+                    line_positions = self.draw_lines_on_image()
+                    self.map_lines_to_spectrum(line_positions)
+
+            if direction:
+                self.direction.set(f"Movement: {direction}")
+
+        self.after(10, self.update_video_feed)
         
     def update_sizes(self):
         root_width = self.window.winfo_width()
@@ -311,6 +377,7 @@ class App(CustomTk):
         self.spectrum()
         self.create_task_list()
         self.bind("<Configure>", lambda e: self.update_sizes())
+        self.find_mods()
         
         Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='lightgray').grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='lightgray')
@@ -330,21 +397,6 @@ class App(CustomTk):
         else:
             self.detector = None
         self.update_video_feed()
-    
-    def analize(self):
-        if self.spec:
-            f=1
-            W=1
-            x=1
-            F=1
-            R=1
-            r=1
-            k=1
-            theta=1
-            I=1
-            t=1
-            lambda_ = np.pi/np.arcsin(np.sqrt((I*np.exp((-2*f**2*x**2)/(W**2*F**2))-(1-R*r)**2/(4*R*r))))/(2*t*np.cos(theta)-(2*t*np.sin(theta)*x)/F-(t*np.cos(theta)*x**2)/F**2)
-            return lambda_
         
     def start_spectrometr(self):
         frame = np.zeros([1088,2048], dtype=np.uint8)
@@ -358,7 +410,7 @@ class App(CustomTk):
 
         if PxLApi.apiSuccess(ret[0]):
             for i in range(1):            
-                ret = self.get_next_frame(self.hCamera, frame, 5)
+                ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
                 self.spec = Image.fromarray(frame)
                 image_tk = ImageTk.PhotoImage(image=self.spec)
                 self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=image_tk)
@@ -370,20 +422,6 @@ class App(CustomTk):
         assert PxLApi.apiSuccess(ret[0]), "uninitialize failed"
         return 0
     
-    def get_next_frame(self,hCamera, frame, maxNumberOfTries):
-        ret = (PxLApi.ReturnCode.ApiUnknownError,)
-        for i in range(maxNumberOfTries):
-            ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
-            if PxLApi.apiSuccess(ret[0]):
-                return ret
-            else:
-                if PxLApi.ReturnCode.ApiStreamStopped == ret[0] or \
-                    PxLApi.ReturnCode.ApiNoCameraAvailableError == ret[0]:
-                    return ret
-                else:
-                    print("    Hmmm... getNextFrame returned %i" % ret[0])
-        return ret
-
     def update_video_feed(self):
         if self.detector:
             direction, frame = self.detector.detect_movement_direction()
@@ -405,22 +443,9 @@ class App(CustomTk):
                 self.direction.set(f"Movement: {direction}")
 
         self.after(10, self.update_video_feed)
-    def calibrate(self):
-        pass
-    
     def spectrum(self):
-        fig, ax = plt.subplots(figsize=(5, 2),facecolor=self.DGRAY)
-        ax.set_facecolor(self.DGRAY)
-        x = np.linspace(-10, 10, 100)
-        y = np.exp(-x**2)
-        ax.plot(x,y,color='darkgreen')
-        ax.grid()
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        canvas = FigureCanvasTkAgg(fig, master=self.c4)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=X, expand=True)
-        plt.tight_layout()
+        points = self.find_mods()
+        self.map_lines_to_spectrum(points)
         
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):

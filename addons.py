@@ -280,7 +280,7 @@ class HotmapWindow(CustomToplevel):
         self.update_plot()
 
     def create_widgets(self):
-        self.slider = Scale(self.window, from_=0, to=len(self.z_values)-1, orient=HORIZONTAL, command=self.update_plot, bg=self.DGRAY, fg='lightgray', troughcolor=self.DGRAY)
+        self.slider = Scale(self.window, from_=0, to=len(self.z_values)-1, orient=HORIZONTAL, command=self.update_plot, bg=self.DGRAY, fg='lightgray', troughcolor=self.DGRAY,borderwidth=0,highlightthickness=1,highlightbackground=self.MGRAY,highlightcolor=self.LGRAY)
         self.slider.pack(fill=X, padx=10, pady=10)
 
         self.fig = plt.figure(figsize=(5, 5), facecolor=self.DGRAY)
@@ -300,6 +300,9 @@ class HotmapWindow(CustomToplevel):
         Z = np.sin(X/100+z) * np.cos(Y/100+z) * z
 
         self.ax.clear()
+        self.ax.patch.set_facecolor(self.DGRAY)
+        self.ax.xaxis.set_pane_color((0,0,0,0))
+        self.ax.yaxis.set_pane_color((0,0,0,0))
         self.ax.plot_surface(X, Y, Z, cmap=cm.hot, norm=Normalize(vmin=np.min(Z), vmax=np.max(Z)))
         self.ax.set_xlabel('Oś X', color='white')
         self.ax.set_ylabel('Oś Y', color='white')
@@ -309,13 +312,6 @@ class HotmapWindow(CustomToplevel):
         self.ax.tick_params(axis='z', colors='white')
 
         self.canvas.draw()
-
-# Example usage
-if __name__ == "__main__":
-    root = Tk()
-    image = Image.new('RGB', (100, 100), color = 'red')
-    hotmap_window = HotmapWindow(root, 1, 1, image)
-    root.mainloop()
 
 class Options(CustomToplevel):
     def __init__(self, parent):
