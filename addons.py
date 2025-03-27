@@ -203,10 +203,10 @@ class CustomTk(Tk, CustomWindow):
         self.state('zoomed')
         self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
         self.menu_button = CButton(self.title_bar, text=' ≡ ', command=self.show_menu)
-        self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7, ipady=1)
+        self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7,fill=Y)
         
-        menu = Menu(self, tearoff=0)
-        menu.config(bg=self.DGRAY,fg='lightgray',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white')
+        menu = Menu(self, tearoff=0,background='darkgray',foreground='lightgray',activebackground=self.RGRAY,activeforeground='white',bd=0,borderwidth=0,relief='flat')
+        menu.config(bg=self.DGRAY,fg='lightgray',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white',disabledforeground='gray')
         menu.add_command(label="Options", command=lambda: Options(self))
         self.menu_bar = menu
         
@@ -316,11 +316,13 @@ class HotmapWindow(CustomToplevel):
 class Options(CustomToplevel):
     def __init__(self, parent):
         CustomToplevel.__init__(self, parent)
-        self.geometry('500x400')
+        self.geometry('1200x800')
         self.set_title("Options")
 
         self.step_x = IntVar(value=100)
         self.step_y = IntVar(value=100)
+        self.offset = IntVar(value=0)
+        self.square_width = IntVar(value=50)
 
         self.create_options()
         for w in self.winfo_children():
@@ -340,9 +342,13 @@ class Options(CustomToplevel):
         self.step_y_entry = Entry(self.window, textvariable=self.step_y)
         self.step_y_entry.pack(pady=10)
         
-        Label(self.window, text="Sequence:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        self.sequence_entry = Entry(self.window)
-        self.sequence_entry.pack(pady=10)
+        Label(self.window, text="Offset:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
+        self.offset_entry = Entry(self.window, textvariable=self.offset)
+        self.offset_entry.pack(pady=10)
+        
+        Label(self.window, text="Square Width:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
+        self.square_width_entry = Entry(self.window, textvariable=self.square_width)
+        self.square_width_entry.pack(pady=10)
         
         CButton(self.window, text="Apply", command=self.apply_settings).pack(pady=10)
 
@@ -357,7 +363,8 @@ class Options(CustomToplevel):
     def apply_settings(self):
         step_x = self.step_x.get()
         step_y = self.step_y.get()
-        sequence = self.sequence_entry.get()
-        print(f"Applying settings: Step X = {step_x}, Step Y = {step_y}, Sequence = {sequence}")
+        offset = self.offset.get()
+        square_width = self.square_width.get()
+        print(f"Applying settings: Step X = {step_x}, Step Y = {step_y}, Offset = {offset}, Square Width = {square_width}")
         # Here you can add the logic to apply these settings to the COM ports
         # For example, you can call a method from the App class to update the step size and sequence

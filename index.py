@@ -3,7 +3,6 @@ from tkinter import ttk,filedialog
 from pixelinkWrapper import*
 from PIL import Image, ImageTk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.colors import Normalize
 from ctypes import*
 import sys
 import cv2
@@ -11,10 +10,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import serial.tools.list_ports
 import time
-import json
-from PIL import ImageDraw
-import matplotlib.colors as mcolors
 from addons import *
+from noise import pnoise2
 
 class App(CustomTk):
     def __init__(self, *args, **kwargs):
@@ -42,7 +39,7 @@ class App(CustomTk):
         self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY,bd=0,highlightthickness=0)
         self.spectrometr_canvas.pack(expand=True, fill=BOTH)
         
-        self.original_image = Image.open("1.bmp")
+        self.original_image = Image.open("Image.bmp")
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
         self.image_tk = None
@@ -82,15 +79,10 @@ class App(CustomTk):
         self.direction = StringVar(value="No movement detected")
         
         self.measurements = [1,2,3]
-        self.data = range(100)
-        self.speedX = 1
-        self.speedY = 1
         
         self.tasks = [
             {"name": "Camera 1", "status": StringVar(value="Pending")},
             {"name": "Camera 2", "status": StringVar(value="Pending")},
-            {"name": "Etalonu calibration", "status": StringVar(value="Not calibrated")},
-            {"name": "Grid calibration", "status": StringVar(value="Not calibrated")},
             {"name": "Auto exposure", "status": StringVar(value="Not calibrated")},
             {"name": "Auto white balance", "status": StringVar(value="Not calibrated")}
         ]
@@ -116,9 +108,6 @@ class App(CustomTk):
             print(self.ports[0].readlines())
         else:
             self.connected = False
-                    
-        self.step_x = IntVar(value=100)
-        self.step_y = IntVar(value=100)
         
         self.update_colors()
         self.create_widgets()
@@ -206,7 +195,25 @@ class App(CustomTk):
         print(f"Options for {task['name']}")
         
     def find_mods(self):
-        self.original_image = Image.open("7.bmp")
+        #self.original_image = Image.open("7.bmp")
+        img_array = np.array(self.original_image.convert('L'))  # Convert to grayscale
+
+        # Generate Perlin noise
+        height, width = img_array.shape
+        scale = 100.0  # Adjust scale for noise granularity
+        octaves = 6    # Number of noise layers
+        persistence = 0.5
+        lacunarity = 2.0
+
+        perlin_noise = np.zeros((height, width), dtype=np.float32)
+        for y in range(height):
+            for x in range(width):
+                perlin_noise[y][x] = pnoise2(x / scale, y / scale, octaves=octaves, persistence=persistence, lacunarity=lacunarity, repeatx=width, repeaty=height, base=42)
+
+        # Normalize Perlin noise to 0-255 and add to the image
+        perlin_noise = (perlin_noise*255).astype(np.uint8)
+        noisy_image = cv2.add(img_array, perlin_noise)
+        self.oryginal_image = Image.fromarray(noisy_image)
         img = np.array(self.original_image.convert('L'))
         _, thresh = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -223,9 +230,9 @@ class App(CustomTk):
             cv2.putText(img_color, f'{mean_val:.2f}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             points.append((x + w // 2, mean_val))
 
-        self.original_image = Image.fromarray(img_color)
-        self.image_tk = ImageTk.PhotoImage(self.original_image)
-        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+        #self.original_image = Image.fromarray(img_color)
+        #self.image_tk = ImageTk.PhotoImage(self.original_image)
+        #self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
         return points
 
     def draw_lines_on_image(self):
@@ -286,7 +293,7 @@ class App(CustomTk):
     def update_video_feed(self):
         if self.detector:
             direction, frame = self.detector.detect_movement_direction()
-
+            self.find_mods()
             if frame is not None:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.image = Image.fromarray(rgb_frame)
@@ -337,11 +344,7 @@ class App(CustomTk):
             self.move(s[0],s[1])
         
     def move(self, dir, step=None):
-        if step is None:
-            step_x = self.step_x.get()
-            step_y = self.step_y.get()
-        else:
-            step_x = step_y = step
+        step_x = step_y = step
 
         self.measurements.append(len(self.measurements))
         self.draw_measurements()
@@ -382,18 +385,11 @@ class App(CustomTk):
         Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='lightgray').grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='lightgray')
         self.direction_label.grid(row=0,column=1)
-        
-        Label(self.c1, text="Step X:", background=self.DGRAY, fg='lightgray').place(x=10, y=130)
-        self.step_x_entry = Entry(self.c1, textvariable=self.step_x, width=5)
-        self.step_x_entry.place(x=60, y=130)
-        
-        Label(self.c1, text="Step Y:", background=self.DGRAY, fg='lightgray').place(x=10, y=160)
-        self.step_y_entry = Entry(self.c1, textvariable=self.step_y, width=5)
-        self.step_y_entry.place(x=60, y=160)
 
     def start_camera(self):
         if not self.calibrated:
             self.detector = MotionDetector(self.cameraIndex)
+            #self.complete_task(self.tasks[0], self.tasks[0]["status"])
         else:
             self.detector = None
         self.update_video_feed()
@@ -404,6 +400,8 @@ class App(CustomTk):
         if not(PxLApi.apiSuccess(ret[0])):
             print("Error: Unable to initialize a camera! rc = %i" % ret[0])
             return 1
+        else:
+            pass
 
         self.hCamera = ret[1]
         ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
