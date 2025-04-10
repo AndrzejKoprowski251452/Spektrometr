@@ -323,6 +323,7 @@ class Options(CustomToplevel):
         self.step_y = IntVar(value=100)
         self.offset = IntVar(value=0)
         self.square_width = IntVar(value=50)
+        self.square_height = IntVar(value=50)
 
         self.create_options()
         for w in self.winfo_children():
@@ -331,26 +332,46 @@ class Options(CustomToplevel):
                 w.config(bg=self.DGRAY, fg='lightgray', highlightbackground='white')
 
     def create_options(self):
-        Label(self.window, text=f"Options for {1}", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        CButton(self.window, text="Import Settings", command=self.import_settings).pack(pady=10)
+        # Główna ramka dla opcji
+        frame = Frame(self.window, bg=self.DGRAY)
+        frame.pack(fill=BOTH, expand=True, padx=20, pady=20)
+
+        # Nagłówek
+        Label(frame, text="Options", font=("Helvetica", 16, "bold"), bg=self.DGRAY, fg='lightgray').grid(row=0, column=0, columnspan=2, pady=(0, 20))
+
+        # Step X
+        Label(frame, text="Step X:", bg=self.DGRAY, fg='lightgray').grid(row=1, column=0, sticky=W, pady=5)
+        self.step_x_entry = Entry(frame, textvariable=self.step_x, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
+        self.step_x_entry.grid(row=1, column=1, sticky=EW, pady=5)
+
+        # Step Y
+        Label(frame, text="Step Y:", bg=self.DGRAY, fg='lightgray').grid(row=2, column=0, sticky=W, pady=5)
+        self.step_y_entry = Entry(frame, textvariable=self.step_y, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
+        self.step_y_entry.grid(row=2, column=1, sticky=EW, pady=5)
+
+        # Offset
+        Label(frame, text="Offset:", bg=self.DGRAY, fg='lightgray').grid(row=3, column=0, sticky=W, pady=5)
+        self.offset_entry = Entry(frame, textvariable=self.offset, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
+        self.offset_entry.grid(row=3, column=1, sticky=EW, pady=5)
+
+        # Square Width
+        Label(frame, text="Square Width:", bg=self.DGRAY, fg='lightgray').grid(row=4, column=0, sticky=W, pady=5)
+        self.square_width_entry = Entry(frame, textvariable=self.square_width, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
+        self.square_width_entry.grid(row=4, column=1, sticky=EW, pady=5)
         
-        Label(self.window, text="Step X:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        self.step_x_entry = Entry(self.window, textvariable=self.step_x)
-        self.step_x_entry.pack(pady=10)
-        
-        Label(self.window, text="Step Y:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        self.step_y_entry = Entry(self.window, textvariable=self.step_y)
-        self.step_y_entry.pack(pady=10)
-        
-        Label(self.window, text="Offset:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        self.offset_entry = Entry(self.window, textvariable=self.offset)
-        self.offset_entry.pack(pady=10)
-        
-        Label(self.window, text="Square Width:", bg=self.DGRAY, fg='lightgray').pack(pady=10)
-        self.square_width_entry = Entry(self.window, textvariable=self.square_width)
-        self.square_width_entry.pack(pady=10)
-        
-        CButton(self.window, text="Apply", command=self.apply_settings).pack(pady=10)
+        Label(frame, text="Square Height:", bg=self.DGRAY, fg='lightgray').grid(row=5, column=0, sticky=W, pady=5)
+        self.square_width_entry = Entry(frame, textvariable=self.square_height, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
+        self.square_width_entry.grid(row=5, column=1, sticky=EW, pady=5)
+
+        # Przyciski
+        button_frame = Frame(frame, bg=self.DGRAY)
+        button_frame.grid(row=6, column=0, columnspan=2, pady=20)
+
+        CButton(button_frame, text="Import Settings", command=self.import_settings).pack(side=LEFT, padx=10)
+        CButton(button_frame, text="Apply", command=self.apply_settings).pack(side=LEFT, padx=10)
+
+        # Ustawienia kolumn
+        frame.columnconfigure(1, weight=1)
 
     def import_settings(self):
         global config
@@ -361,10 +382,12 @@ class Options(CustomToplevel):
         self.focus()
 
     def apply_settings(self):
-        step_x = self.step_x.get()
-        step_y = self.step_y.get()
-        offset = self.offset.get()
-        square_width = self.square_width.get()
-        print(f"Applying settings: Step X = {step_x}, Step Y = {step_y}, Offset = {offset}, Square Width = {square_width}")
-        # Here you can add the logic to apply these settings to the COM ports
-        # For example, you can call a method from the App class to update the step size and sequence
+        settings = {
+            "step_x": self.step_x.get(),
+            "step_y": self.step_y.get(),
+            "offset": self.offset.get(),
+            "width": self.square_width.get(),
+            "height": self.square_height.get(),
+        }
+        with open('options.json', 'w') as f:
+            json.dump(settings, f, indent=4)

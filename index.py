@@ -11,7 +11,9 @@ import matplotlib.pyplot as plt
 import serial.tools.list_ports
 import time
 from addons import *
-from noise import pnoise2
+import threading
+
+options = json.load(open('options.json'))
 
 class App(CustomTk):
     def __init__(self, *args, **kwargs):
@@ -51,6 +53,7 @@ class App(CustomTk):
         self.down = CButton(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'))
         self.origin = CButton(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'))
         self.v = Label(self.c1,text='x:0,y:0',background=self.DGRAY,fg='lightgray',anchor='center')
+        self.s = CButton(self.c1,text='s',width=2,height=1,command=self.sequence)
         
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -62,6 +65,7 @@ class App(CustomTk):
         self.up.place(x=50,y=25)
         self.down.place(x=50,y=75)
         self.origin.place(x=50,y=50)
+        self.s.place(x=100,y=50)
         self.v.place(x=42,y=100)
         self.frame_label.place(x=0,y=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -93,7 +97,8 @@ class App(CustomTk):
         self.calibrated = False
         
         self.ports = []
-        if len(list(serial.tools.list_ports.comports())) != 0 and any(['COM' in p[0] for p in serial.tools.list_ports.comports()]):
+        self.connected = True
+        if False and len(list(serial.tools.list_ports.comports())) != 0 and any(['COM' in p[0] for p in serial.tools.list_ports.comports()]):
             self.connected = True
             for i in serial.tools.list_ports.comports():
                 s = serial.Serial(i[0])
@@ -104,10 +109,9 @@ class App(CustomTk):
                 s.timeout=1
                 s.rtscts=True
                 self.ports.append(s)
-            self.ports[0].write('list-sensors'.encode())
-            print(self.ports[0].readlines())
         else:
-            self.connected = False
+            pass
+            #self.connected = False
         
         self.update_colors()
         self.create_widgets()
@@ -132,7 +136,10 @@ class App(CustomTk):
         
     def cameraI(self,i):
         self.cameraIndex=i
-        self.detector = MotionDetector(self.cameraIndex)
+        if not self.calibrated:
+            self.detector = MotionDetector(self.cameraIndex)
+        else:
+            self.detector = cv2.VideoCapture(self.cameraIndex) 
         
     def console_data(self,f):
         readable_time = time.strftime('%H:%M:%S', time.localtime(time.time()))
@@ -169,6 +176,8 @@ class App(CustomTk):
                     if cap.isOpened():
                         Button(c1.window,text=f'Camera {i}',command=lambda i=i:self.cameraI(i)).pack(pady=5)
                         cap.release()
+                    else:
+                        break
                 except:
                     break
         elif task['name'] == "Camera 2":
@@ -195,26 +204,8 @@ class App(CustomTk):
         print(f"Options for {task['name']}")
         
     def find_mods(self):
-        #self.original_image = Image.open("7.bmp")
-        img_array = np.array(self.original_image.convert('L'))  # Convert to grayscale
-
-        # Generate Perlin noise
-        height, width = img_array.shape
-        scale = 100.0  # Adjust scale for noise granularity
-        octaves = 6    # Number of noise layers
-        persistence = 0.5
-        lacunarity = 2.0
-
-        perlin_noise = np.zeros((height, width), dtype=np.float32)
-        for y in range(height):
-            for x in range(width):
-                perlin_noise[y][x] = pnoise2(x / scale, y / scale, octaves=octaves, persistence=persistence, lacunarity=lacunarity, repeatx=width, repeaty=height, base=42)
-
-        # Normalize Perlin noise to 0-255 and add to the image
-        perlin_noise = (perlin_noise*255).astype(np.uint8)
-        noisy_image = cv2.add(img_array, perlin_noise)
-        self.oryginal_image = Image.fromarray(noisy_image)
-        img = np.array(self.original_image.convert('L'))
+        self.original_image = Image.open("7.bmp")
+        img = np.array(self.original_image.convert('L'))  # Convert to grayscale
         _, thresh = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -230,9 +221,9 @@ class App(CustomTk):
             cv2.putText(img_color, f'{mean_val:.2f}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             points.append((x + w // 2, mean_val))
 
-        #self.original_image = Image.fromarray(img_color)
-        #self.image_tk = ImageTk.PhotoImage(self.original_image)
-        #self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+        self.original_image = Image.fromarray(img_color)
+        self.image_tk = ImageTk.PhotoImage(self.original_image)
+        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
         return points
 
     def draw_lines_on_image(self):
@@ -291,11 +282,35 @@ class App(CustomTk):
         plt.tight_layout()
 
     def update_video_feed(self):
-        if self.detector:
+        if self.detector and not self.calibrated:
             direction, frame = self.detector.detect_movement_direction()
-            self.find_mods()
+            if direction:
+                self.direction.set(f"Movement: {direction}")
+                if self.connected:
+                    time.sleep(0.1)
+                    self.move('r')
+                    if direction == 'left' or direction == 'right':
+                        lh = self.ports[0]
+                        lv = self.ports[1]
+                    else:
+                        lv = self.ports[1]
+                        lh = self.ports[0]
+                    
+                    self.ports[0] = lh
+                    self.ports[1] = lv
+            self.calibrated = True
+            if self.calibrated:
+                self.detector = cv2.VideoCapture(self.cameraIndex)
+        else:
+            frame = self.detector.read()[1]
+            frame = cv2.flip(frame, 1)
             if frame is not None:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                height, width, _ = frame.shape
+                center_x, center_y = width // 2, height // 2
+                cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150,150), 1)  # Horizontal line
+                cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)  # Vertical line
+
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
                 self.image = Image.fromarray(rgb_frame)
                 resized_image = self.original_image.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
                 self.image_tk = ImageTk.PhotoImage(resized_image)
@@ -304,12 +319,9 @@ class App(CustomTk):
                 image_tk = ImageTk.PhotoImage(image=self.image)
                 self.frame_label.configure(image=image_tk)
                 self.frame_label.image = image_tk
-                if self.image_tk is None:
-                    line_positions = self.draw_lines_on_image()
-                    self.map_lines_to_spectrum(line_positions)
 
-            if direction:
-                self.direction.set(f"Movement: {direction}")
+                if self.image_tk is None:
+                    self.draw_lines_on_image()
 
         self.after(10, self.update_video_feed)
         
@@ -337,42 +349,40 @@ class App(CustomTk):
         self.button_frame.update_idletasks()
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
         
-    def sequence(self,st):
-        steps = st.split(',')
-        for s in steps:
-            s = s.split(':')
-            self.move(s[0],s[1])
+    def sequence(self):
+        width = options['width']
+        height = options['height']
+        step_x = options['step_x']
+        step_y = options['step_y']
+        if self.connected:
+            for i in range(0, width, step_x):
+                self.move('r', i)
+                for j in range(0, height, step_y):
+                    self.move('d', j)
+                    time.sleep(0.1)
         
-    def move(self, dir, step=None):
-        step_x = step_y = step
-
-        self.measurements.append(len(self.measurements))
-        self.draw_measurements()
+    def move(self, dir, step=0):
+        if step == 0:
+            step_x = options['step_x']
+            step_y = options['step_y']
+        else:
+            step_x = step_y = step
         if self.connected:
             if dir == 'r':
                 self.ports[0].write((f"M:1+P{step_x}\r\n").encode())
-                time.sleep(1)
                 self.ports[0].write('G:\r\n'.encode())
             elif dir == 'l':
                 self.ports[0].write((f"M:1-P{step_x}\r\n").encode())
-                time.sleep(1)
                 self.ports[0].write('G:\r\n'.encode())
             elif dir == 'u':
                 self.ports[1].write((f"M:1+P{step_y}\r\n").encode())
-                time.sleep(1)
                 self.ports[1].write('G:\r\n'.encode())
             elif dir == 'd':
                 self.ports[1].write((f"M:1-P{step_y}\r\n").encode())
-                time.sleep(1)
                 self.ports[1].write('G:\r\n'.encode())
             elif dir == 'o':
                 self.ports[0].write((f"H:1\r\n").encode())
                 self.ports[1].write((f"H:1\r\n").encode())
-            self.ports[0].write('Q:\r\n'.encode())
-            self.ports[1].write('Q:\r\n'.encode())
-            x = self.ports[0].readline().decode()
-            y = self.ports[1].readline().decode()
-            self.v.config(text=f'x:{x},y:{y}')
 
     def create_widgets(self):
         self.start_camera()
@@ -404,6 +414,14 @@ class App(CustomTk):
             pass
 
         self.hCamera = ret[1]
+        ret = PxLApi.initialize(0, PxLApi.InitializeExFlags.ISSUE_STREAM_STOP)
+        if PxLApi.apiSuccess(ret[0]):
+            ret = PxLApi.loadSettings(self.hCamera, PxLApi.Settings.SETTINGS_FACTORY)
+            if not PxLApi.apiSuccess(ret[0]):
+                print("Could not load factory settings!")
+            else:
+                print("Factory default settings restored")
+
         ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
 
         if PxLApi.apiSuccess(ret[0]):
@@ -420,27 +438,6 @@ class App(CustomTk):
         assert PxLApi.apiSuccess(ret[0]), "uninitialize failed"
         return 0
     
-    def update_video_feed(self):
-        if self.detector:
-            direction, frame = self.detector.detect_movement_direction()
-
-            if frame is not None:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.image = Image.fromarray(rgb_frame)
-                resized_image = self.original_image.resize((int(self.original_image.width * self.scale),int(self.original_image.height * self.scale)))
-                self.image_tk = ImageTk.PhotoImage(resized_image)
-
-                self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-                image_tk = ImageTk.PhotoImage(image=self.image)
-                self.frame_label.configure(image=image_tk)
-                self.frame_label.image = image_tk
-                if self.image_tk == None:
-                    self.draw_lines_on_image()
-
-            if direction:
-                self.direction.set(f"Movement: {direction}")
-
-        self.after(10, self.update_video_feed)
     def spectrum(self):
         points = self.find_mods()
         self.map_lines_to_spectrum(points)
