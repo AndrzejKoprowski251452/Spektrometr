@@ -15,6 +15,7 @@ from PIL import ImageDraw
 import matplotlib.colors as mcolors
 from matplotlib import cm
 from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.gridspec import GridSpec
 
 def get_color_gradient(n):
     colors = list(mcolors.TABLEAU_COLORS.values())
@@ -282,12 +283,16 @@ class HotmapWindow(CustomToplevel):
         self.update_plot()
 
     def create_widgets(self):
-        self.slider = Scale(self.window, from_=0, to=len(self.z_values)-1, orient=HORIZONTAL, command=self.update_plot, bg=self.DGRAY, fg='lightgray', troughcolor=self.DGRAY,borderwidth=0,highlightthickness=1,highlightbackground=self.MGRAY,highlightcolor=self.LGRAY)
+        self.slider = Scale(self.window, from_=0, to=len(self.z_values)-1, orient=HORIZONTAL, command=self.update_plot, bg=self.DGRAY, fg='lightgray', troughcolor=self.DGRAY, borderwidth=0, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.LGRAY)
         self.slider.pack(fill=X, padx=10, pady=10)
 
-        self.fig = plt.figure(figsize=(5, 5), facecolor=self.DGRAY)
-        self.ax1 = self.fig.add_subplot(122, projection='3d')
-        self.ax2 = self.fig.add_subplot(111, projection='polar')
+        self.fig = plt.figure(figsize=(10, 5), facecolor=self.DGRAY)
+        gs = GridSpec(1, 2, figure=self.fig, width_ratios=[2, 1])
+
+        self.ax1 = self.fig.add_subplot(gs[0], projection='3d')
+
+        self.ax2 = self.fig.add_subplot(gs[1], projection='polar')
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.window)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
@@ -317,7 +322,7 @@ class HotmapWindow(CustomToplevel):
         
         self.ax2.clear()
         self.ax2.patch.set_facecolor(self.DGRAY)
-        self.ax2.plot(a, np.sin(a), color='red')
+        self.ax2.plot(a, np.sin(a*z), color='red')
         self.ax2.set_xlabel('Kąt', color='white')
 
         self.canvas.draw()

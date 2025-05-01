@@ -371,6 +371,7 @@ class App(CustomTk):
         if self.connected:
             for i in range(0, width, step_x):
                 self.move('r', i)
+                time.sleep(0.1)
                 for j in range(0, height, step_y):
                     self.move('d', j)
                     time.sleep(0.1)
