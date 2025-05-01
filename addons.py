@@ -54,6 +54,7 @@ class CustomWindow:
         self.close_button.pack(side=RIGHT, ipadx=7, ipady=1)
         self.minimize_button.pack(side=RIGHT, ipadx=7, ipady=1)
         self.window.pack(expand=1, fill=BOTH)
+        self.window.pack_propagate(1)
         
         self.title_bar.bind('<Button-1>', self.get_pos)
         self.title_bar_title.bind('<Button-1>', self.get_pos)
@@ -270,7 +271,8 @@ class MotionDetector:
 class HotmapWindow(CustomToplevel):
     def __init__(self, parent, i, n, image):
         CustomToplevel.__init__(self, parent)
-        self.set_title(f'{i}')
+        self.set_title(f'Pomiar {i}')
+        self.geometry('1200x800')
 
         self.image = image
         self.z_values = np.linspace(-10, 10, 100)
@@ -284,7 +286,8 @@ class HotmapWindow(CustomToplevel):
         self.slider.pack(fill=X, padx=10, pady=10)
 
         self.fig = plt.figure(figsize=(5, 5), facecolor=self.DGRAY)
-        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.ax1 = self.fig.add_subplot(122, projection='3d')
+        self.ax2 = self.fig.add_subplot(111, projection='polar')
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.window)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
@@ -296,20 +299,26 @@ class HotmapWindow(CustomToplevel):
 
         x = np.arange(0, self.image.width, 1)
         y = np.arange(0, self.image.height, 1)
+        a = np.linspace(0, 2 * np.pi, 360)
         X, Y = np.meshgrid(x, y)
         Z = np.sin(X/100+z) * np.cos(Y/100+z) * z
 
-        self.ax.clear()
-        self.ax.patch.set_facecolor(self.DGRAY)
-        self.ax.xaxis.set_pane_color((0,0,0,0))
-        self.ax.yaxis.set_pane_color((0,0,0,0))
-        self.ax.plot_surface(X, Y, Z, cmap=cm.hot, norm=Normalize(vmin=np.min(Z), vmax=np.max(Z)))
-        self.ax.set_xlabel('Oś X', color='white')
-        self.ax.set_ylabel('Oś Y', color='white')
-        self.ax.set_zlabel('Oś Z', color='white')
-        self.ax.tick_params(axis='x', colors='white')
-        self.ax.tick_params(axis='y', colors='white')
-        self.ax.tick_params(axis='z', colors='white')
+        self.ax1.clear()
+        self.ax1.patch.set_facecolor(self.DGRAY)
+        self.ax1.xaxis.set_pane_color((0,0,0,0))
+        self.ax1.yaxis.set_pane_color((0,0,0,0))
+        self.ax1.plot_surface(X, Y, Z, cmap=cm.hot, norm=Normalize(vmin=np.min(Z), vmax=np.max(Z)))
+        self.ax1.set_xlabel('Oś X', color='white')
+        self.ax1.set_ylabel('Oś Y', color='white')
+        self.ax1.set_zlabel('Oś Z', color='white')
+        self.ax1.tick_params(axis='x', colors='white')
+        self.ax1.tick_params(axis='y', colors='white')
+        self.ax1.tick_params(axis='z', colors='white')
+        
+        self.ax2.clear()
+        self.ax2.patch.set_facecolor(self.DGRAY)
+        self.ax2.plot(a, np.sin(a), color='red')
+        self.ax2.set_xlabel('Kąt', color='white')
 
         self.canvas.draw()
 
@@ -332,29 +341,23 @@ class Options(CustomToplevel):
                 w.config(bg=self.DGRAY, fg='lightgray', highlightbackground='white')
 
     def create_options(self):
-        # Główna ramka dla opcji
         frame = Frame(self.window, bg=self.DGRAY)
         frame.pack(fill=BOTH, expand=True, padx=20, pady=20)
 
-        # Nagłówek
         Label(frame, text="Options", font=("Helvetica", 16, "bold"), bg=self.DGRAY, fg='lightgray').grid(row=0, column=0, columnspan=2, pady=(0, 20))
 
-        # Step X
         Label(frame, text="Step X:", bg=self.DGRAY, fg='lightgray').grid(row=1, column=0, sticky=W, pady=5)
         self.step_x_entry = Entry(frame, textvariable=self.step_x, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
         self.step_x_entry.grid(row=1, column=1, sticky=EW, pady=5)
 
-        # Step Y
         Label(frame, text="Step Y:", bg=self.DGRAY, fg='lightgray').grid(row=2, column=0, sticky=W, pady=5)
         self.step_y_entry = Entry(frame, textvariable=self.step_y, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
         self.step_y_entry.grid(row=2, column=1, sticky=EW, pady=5)
 
-        # Offset
         Label(frame, text="Offset:", bg=self.DGRAY, fg='lightgray').grid(row=3, column=0, sticky=W, pady=5)
         self.offset_entry = Entry(frame, textvariable=self.offset, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
         self.offset_entry.grid(row=3, column=1, sticky=EW, pady=5)
 
-        # Square Width
         Label(frame, text="Square Width:", bg=self.DGRAY, fg='lightgray').grid(row=4, column=0, sticky=W, pady=5)
         self.square_width_entry = Entry(frame, textvariable=self.square_width, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
         self.square_width_entry.grid(row=4, column=1, sticky=EW, pady=5)
@@ -363,14 +366,12 @@ class Options(CustomToplevel):
         self.square_width_entry = Entry(frame, textvariable=self.square_height, bg=self.RGRAY, fg='lightgray', insertbackground='lightgray')
         self.square_width_entry.grid(row=5, column=1, sticky=EW, pady=5)
 
-        # Przyciski
         button_frame = Frame(frame, bg=self.DGRAY)
         button_frame.grid(row=6, column=0, columnspan=2, pady=20)
 
         CButton(button_frame, text="Import Settings", command=self.import_settings).pack(side=LEFT, padx=10)
         CButton(button_frame, text="Apply", command=self.apply_settings).pack(side=LEFT, padx=10)
 
-        # Ustawienia kolumn
         frame.columnconfigure(1, weight=1)
 
     def import_settings(self):

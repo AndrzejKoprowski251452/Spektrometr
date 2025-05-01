@@ -85,10 +85,10 @@ class App(CustomTk):
         self.measurements = [1,2,3]
         
         self.tasks = [
-            {"name": "Camera 1", "status": StringVar(value="Pending")},
-            {"name": "Camera 2", "status": StringVar(value="Pending")},
-            {"name": "Auto exposure", "status": StringVar(value="Not calibrated")},
-            {"name": "Auto white balance", "status": StringVar(value="Not calibrated")}
+            {"name": "Camera 1", "status": StringVar(value="Pending"),"event": None},
+            {"name": "Camera 2", "status": StringVar(value="Pending"),"event": None},
+            {"name": "Auto exposure", "status": StringVar(value="Not calibrated"),"event": None},
+            {"name": "Auto white balance", "status": StringVar(value="Not calibrated"),"event": None},
         ]
         
         self.image = None  
@@ -110,8 +110,7 @@ class App(CustomTk):
                 s.rtscts=True
                 self.ports.append(s)
         else:
-            pass
-            #self.connected = False
+            self.connected = False
         
         self.update_colors()
         self.create_widgets()
@@ -153,18 +152,33 @@ class App(CustomTk):
 
             label = Label(frame, text=task["name"], bg=self.DGRAY, fg='lightgray')
             label.grid(row=0, column=0, padx=10)
+
             status_label = Label(frame, textvariable=task["status"], bg=self.DGRAY, fg='red')
             status_label.grid(row=0, column=1, padx=10)
 
-            complete_button = CButton(frame, text="Complete", command=lambda t=task, sl=status_label: self.complete_task(t, sl))
+            complete_button = CButton(
+                frame,
+                text="Complete",
+                command=lambda t=task, sl=status_label: self.change_state(t, sl)
+            )
             complete_button.grid(row=0, column=2, padx=10)
 
-            options_button = CButton(frame, text="Options", command=lambda t=task: self.show_task_options(t))
+            options_button = CButton(
+                frame,
+                text="Options",
+                command=lambda t=task: self.show_task_options(t)
+            )
             options_button.grid(row=0, column=3, padx=10)
 
-    def complete_task(self, task,status_label):
-        status_label.config(fg='green')
-        task["status"].set("Completed")
+    def change_state(self, task,status_label):
+        try:
+            status_label.config(fg='green')
+            task["status"].set("Completed")
+            print(f"Task '{task['name']}' completed successfully.")
+        except Exception as e:
+            status_label.config(fg='red')
+            task["status"].set("Failed")
+            print(f"Error completing task '{task['name']}': {e}")
 
     def show_task_options(self, task):
         if task['name'] == "Camera 1":
@@ -399,7 +413,7 @@ class App(CustomTk):
     def start_camera(self):
         if not self.calibrated:
             self.detector = MotionDetector(self.cameraIndex)
-            #self.complete_task(self.tasks[0], self.tasks[0]["status"])
+            #self.change_state(self.tasks[0], self.tasks[0]["status"])
         else:
             self.detector = None
         self.update_video_feed()

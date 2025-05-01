@@ -3,5 +3,19 @@
     "step_y": 100,
     "offset": 0,
     "width": 50,
-    "height": 50
+    "height": 50,
+    "camera": {
+        "x": 0,
+        "y": 0,
+        "zoom": 1.0
+    },
+    "grid": {
+        "x": 0,
+        "y": 0,
+        "width": 1000,
+        "height": 1000
+    },
+    "grid_size": 10,
+    "camera1":0,
+    "camera2":0
 }
