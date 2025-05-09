@@ -333,11 +333,11 @@ class Options(CustomToplevel):
         self.geometry('1200x800')
         self.set_title("Options")
 
-        self.step_x = IntVar(value=100)
-        self.step_y = IntVar(value=100)
-        self.offset = IntVar(value=0)
-        self.square_width = IntVar(value=50)
-        self.square_height = IntVar(value=50)
+        self.step_x = IntVar(value=config['step_x'])
+        self.step_y = IntVar(value=config['step_y'])
+        self.offset = IntVar(value=config['offset'])
+        self.square_width = IntVar(value=config['width'])
+        self.square_height = IntVar(value=config['height'])
 
         self.create_options()
         for w in self.winfo_children():

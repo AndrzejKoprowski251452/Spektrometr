@@ -11,13 +11,14 @@ import matplotlib.pyplot as plt
 import serial.tools.list_ports
 import time
 from addons import *
-import threading
+import asyncio
+from async_tkinter_loop import async_mainloop
 
 options = json.load(open('options.json'))
 
 class App(CustomTk):
     def __init__(self, *args, **kwargs):
-        CustomTk.__init__(self, *args, **kwargs)
+        CustomTk.__init__(self,*args, **kwargs)
         self.set_title("Arczy Puszka")
         self.iconbitmap("icon.ico")
         
@@ -53,7 +54,7 @@ class App(CustomTk):
         self.down = CButton(self.c1,text='↓',width=2,height=1,command=lambda :self.move('d'))
         self.origin = CButton(self.c1,text='o',width=2,height=1,command=lambda:self.move('o'))
         self.v = Label(self.c1,text='x:0,y:0',background=self.DGRAY,fg='lightgray',anchor='center')
-        self.s = CButton(self.c1,text='s',width=2,height=1,command=self.sequence)
+        self.s = CButton(self.c1,text='s',width=2,height=1,command=self.start_sequence)
         
         self.c1.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.c2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -77,7 +78,7 @@ class App(CustomTk):
         self.c5.grid_rowconfigure(0, weight=1)
         self.c5.grid_columnconfigure(0, weight=1)
         
-        self.cameraIndex=1
+        self.cameraIndex=0
         
         self.detector = None
         self.direction = StringVar(value="No movement detected")
@@ -98,7 +99,8 @@ class App(CustomTk):
         
         self.ports = []
         self.connected = True
-        if False and len(list(serial.tools.list_ports.comports())) != 0 and any(['COM' in p[0] for p in serial.tools.list_ports.comports()]):
+        self.update()
+        if len(list(serial.tools.list_ports.comports())) != 0 and any(['COM' in p[0] for p in serial.tools.list_ports.comports()]):
             self.connected = True
             for i in serial.tools.list_ports.comports():
                 s = serial.Serial(i[0])
@@ -336,7 +338,6 @@ class App(CustomTk):
 
                 if self.image_tk is None:
                     self.draw_lines_on_image()
-
         self.after(10, self.update_video_feed)
         
     def update_sizes(self):
@@ -363,18 +364,20 @@ class App(CustomTk):
         self.button_frame.update_idletasks()
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
         
-    def sequence(self):
-        width = options['width']
-        height = options['height']
-        step_x = options['step_x']
-        step_y = options['step_y']
+    async def make_sequence(self):
         if self.connected:
-            for i in range(0, width, step_x):
-                self.move('r', i)
-                time.sleep(0.1)
-                for j in range(0, height, step_y):
-                    self.move('d', j)
-                    time.sleep(0.1)
+            for i in range(0, options['width'], options['step_x']):
+                self.move('r', options['step_x'])
+                await asyncio.sleep(1)
+                for j in range(0, options['height'], options['step_y']):
+                    self.move('u', options['step_y'])
+                    await asyncio.sleep(1)
+                self.move('d', options['height'])
+                await asyncio.sleep(1)
+        print("Sequence completed!")
+
+    def start_sequence(self):
+        asyncio.create_task(self.make_sequence())
         
     def move(self, dir, step=0):
         if step == 0:
@@ -464,4 +467,4 @@ class App(CustomTk):
 
 if __name__ == "__main__":
     app = App()
-    app.mainloop()
+    async_mainloop(app)
