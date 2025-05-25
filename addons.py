@@ -23,7 +23,7 @@ def get_color_gradient(n):
     return gradient
 import numpy as np
 
-config = json.load(open('api.settings.json'))
+config = json.load(open('options.json'))
 LGRAY = '#232323'
 DGRAY = '#161616'
 RGRAY = '#2c2c2c'
@@ -222,6 +222,7 @@ class CustomToplevel(Toplevel, CustomWindow):
         CustomWindow.__init__(self, *args, **kwargs)
         self.overrideredirect(True)
         self.config(bg=self.DGRAY, highlightthickness=0)
+        self.iconbitmap("icon.ico")
         
 class StreamToFunction:
     def __init__(self, func):
@@ -269,62 +270,71 @@ class MotionDetector:
     def release(self):
         self.cap.release()
 
-class HotmapWindow(CustomToplevel):
+class HeatMapWindow(CustomToplevel):
     def __init__(self, parent, i, n, image):
         CustomToplevel.__init__(self, parent)
         self.set_title(f'Pomiar {i}')
         self.geometry('1200x800')
 
         self.image = image
-        self.z_values = np.linspace(-10, 10, 100)
-        self.current_z_index = 0
+        # n: lista [i, j, [spektrum]]
+        n = np.array(n, dtype=object)
+        # Wyznacz rozmiar siatki
+        xs = sorted(set([row[0] for row in n]))
+        ys = sorted(set([row[1] for row in n]))
+        nx, ny = len(xs), len(ys)
+        spectrum_len = len(n[0][2])
+        # Stwórz macierz 3D: [nx, ny, długość_fali]
+        self.cube = np.zeros((nx, ny, spectrum_len))
+        for row in n:
+            ix = xs.index(row[0])
+            iy = ys.index(row[1])
+            self.cube[ix, iy, :] = row[2]
+        self.current_lambda = 0
 
         self.create_widgets()
-        self.update_plot()
+        self.update_heatmap()
 
     def create_widgets(self):
-        self.slider = Scale(self.window, from_=0, to=len(self.z_values)-1, orient=HORIZONTAL, command=self.update_plot, bg=self.DGRAY, fg='lightgray', troughcolor=self.DGRAY, borderwidth=0, highlightthickness=1, highlightbackground=self.MGRAY, highlightcolor=self.LGRAY)
+        # Suwak do wyboru długości fali (indeksu spektrum)
+        self.slider = Scale(
+            self.window,
+            from_=0,
+            to=self.cube.shape[2] - 1,
+            orient=HORIZONTAL,
+            command=self.on_slider,
+            bg=self.DGRAY,
+            fg='lightgray',
+            troughcolor=self.DGRAY,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=self.MGRAY,
+            highlightcolor=self.LGRAY
+        )
         self.slider.pack(fill=X, padx=10, pady=10)
 
-        self.fig = plt.figure(figsize=(10, 5), facecolor=self.DGRAY)
-        gs = GridSpec(1, 2, figure=self.fig, width_ratios=[2, 1])
-
-        self.ax1 = self.fig.add_subplot(gs[0], projection='3d')
-
-        self.ax2 = self.fig.add_subplot(gs[1], projection='polar')
-
+        self.fig = plt.figure(figsize=(8, 6), facecolor=self.DGRAY)
+        self.ax = self.fig.add_subplot(111, projection='3d')
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.window)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         self.canvas.get_tk_widget().config(bg=self.DGRAY)
 
-    def update_plot(self, val=None):
-        self.current_z_index = int(self.slider.get())
-        z = self.z_values[self.current_z_index]
+    def on_slider(self, val):
+        self.current_lambda = int(val)
+        self.update_heatmap()
 
-        x = np.arange(0, self.image.width, 1)
-        y = np.arange(0, self.image.height, 1)
-        a = np.linspace(0, 2 * np.pi, 360)
-        X, Y = np.meshgrid(x, y)
-        Z = np.sin(X/100+z) * np.cos(Y/100+z) * z
-
-        self.ax1.clear()
-        self.ax1.patch.set_facecolor(self.DGRAY)
-        self.ax1.xaxis.set_pane_color((0,0,0,0))
-        self.ax1.yaxis.set_pane_color((0,0,0,0))
-        self.ax1.plot_surface(X, Y, Z, cmap=cm.hot, norm=Normalize(vmin=np.min(Z), vmax=np.max(Z)))
-        self.ax1.set_xlabel('Oś X', color='white')
-        self.ax1.set_ylabel('Oś Y', color='white')
-        self.ax1.set_zlabel('Oś Z', color='white')
-        self.ax1.tick_params(axis='x', colors='white')
-        self.ax1.tick_params(axis='y', colors='white')
-        self.ax1.tick_params(axis='z', colors='white')
-        
-        self.ax2.clear()
-        self.ax2.patch.set_facecolor(self.DGRAY)
-        self.ax2.plot(a, np.sin(a*z), color='red')
-        self.ax2.set_xlabel('Kąt', color='white')
-
+    def update_heatmap(self):
+        self.ax.clear()
+        # Wyświetl mapę jasności dla wybranej długości fali
+        data = self.cube[:, :, self.current_lambda]
+        X, Y = np.meshgrid(range(data.shape[0]), range(data.shape[1]))
+        self.ax.plot_surface(X, Y, data.T, cmap='hot')
+        self.ax.set_title(f"Heatmapa 3D dla długości fali {self.current_lambda}", color='white')
+        self.ax.set_xlabel("X", color='white')
+        self.ax.set_ylabel("Y", color='white')
+        self.ax.set_zlabel("Jasność", color='white')
+        self.fig.tight_layout()
         self.canvas.draw()
 
 class Options(CustomToplevel):

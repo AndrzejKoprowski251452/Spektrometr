@@ -13,12 +13,16 @@ import time
 from addons import *
 import asyncio
 from async_tkinter_loop import async_mainloop
+import os
+import csv
+import glob
 
 options = json.load(open('options.json'))
 
 class App(CustomTk):
     def __init__(self, *args, **kwargs):
         CustomTk.__init__(self,*args, **kwargs)
+        self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
         self.set_title("Arczy Puszka")
         self.iconbitmap("icon.ico")
         
@@ -42,7 +46,7 @@ class App(CustomTk):
         self.spectrometr_canvas = Canvas(self.c3, bg=self.DGRAY,bd=0,highlightthickness=0)
         self.spectrometr_canvas.pack(expand=True, fill=BOTH)
         
-        self.original_image = Image.open("Image.bmp")
+        self.original_image = Image.open("3.bmp")
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
         self.image_tk = None
@@ -83,7 +87,8 @@ class App(CustomTk):
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
-        self.measurements = [1,2,3]
+        self.measurements = [1]
+        self.bin = []
         
         self.tasks = [
             {"name": "Camera 1", "status": StringVar(value="Pending"),"event": None},
@@ -103,25 +108,41 @@ class App(CustomTk):
         if len(list(serial.tools.list_ports.comports())) != 0 and any(['COM' in p[0] for p in serial.tools.list_ports.comports()]):
             self.connected = True
             for i in serial.tools.list_ports.comports():
-                s = serial.Serial(i[0])
-                s.baudrate=9600
-                s.BYTESIZES=serial.EIGHTBITS
-                s.PARITIES=serial.PARITY_NONE
-                s.STOPBITS=serial.STOPBITS_ONE
-                s.timeout=1
-                s.rtscts=True
-                self.ports.append(s)
+                print(i[0])
+                if i[0] == 'COM5' or i[0] == 'COM9':
+                    
+                    s = serial.Serial(i[0])
+                    s.baudrate=9600
+                    s.BYTESIZES=serial.EIGHTBITS
+                    s.PARITIES=serial.PARITY_NONE
+                    s.STOPBITS=serial.STOPBITS_ONE
+                    s.timeout=1
+                    s.rtscts=True
+                    self.ports.append(s)
         else:
             self.connected = False
-        
+            
         self.update_colors()
-        self.create_widgets()
         self.draw_measurements()
         self.update_sizes()
         
         self.spectrometr_canvas.bind("<MouseWheel>", self.zoom)
         self.spectrometr_canvas.bind("<ButtonPress-1>", self.start_pan)
         self.spectrometr_canvas.bind("<B1-Motion>", self.pan)
+        
+        self.xmin_var = StringVar(value="1000")
+        self.xmax_var = StringVar(value="1200")
+        
+        Label(self.c2, text="X min:", bg=self.DGRAY, fg='lightgray').grid(row=2, column=0, sticky="w", padx=5)
+        self.xmin_entry = Entry(self.c2, textvariable=self.xmin_var, width=8)
+        self.xmin_entry.grid(row=2, column=1, sticky="w", padx=5)
+
+        Label(self.c2, text="X max:", bg=self.DGRAY, fg='lightgray').grid(row=3, column=0, sticky="w", padx=5)
+        self.xmax_entry = Entry(self.c2, textvariable=self.xmax_var, width=8)
+        self.xmax_entry.grid(row=3, column=1, sticky="w", padx=5)
+
+        CButton(self.c2, text="Ustaw zakres X", command=self.set_x_range).grid(row=4, column=0, columnspan=2, pady=5)
+        
         
     def zoom(self, event):
         if event.delta > 0 and self.scale < 4:
@@ -172,6 +193,17 @@ class App(CustomTk):
             )
             options_button.grid(row=0, column=3, padx=10)
 
+            if i == 0:
+                Label(frame, text="X min:", bg=self.DGRAY, fg='lightgray').grid(row=0, column=9, padx=(30,5))
+                self.xmin_entry = Entry(frame, textvariable=self.xmin_var, width=8)
+                self.xmin_entry.grid(row=0, column=10, padx=5)
+
+                Label(frame, text="X max:", bg=self.DGRAY, fg='lightgray').grid(row=0, column=11, padx=5)
+                self.xmax_entry = Entry(frame, textvariable=self.xmax_var, width=8)
+                self.xmax_entry.grid(row=0, column=12, padx=5)
+
+                CButton(frame, text="Ustaw zakres X", command=self.set_x_range).grid(row=0, column=13, padx=10)
+
     def change_state(self, task,status_label):
         try:
             status_label.config(fg='green')
@@ -212,22 +244,39 @@ class App(CustomTk):
         elif task['name'] == "Grid calibration":
             pass
         elif task['name'] == "Auto exposure":
-            ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.EXPOSURE)
-            assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
+            if self.hCamera is not None:
+                exposure = 0
+                params = [exposure]
+                ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.EXPOSURE)
+                params = ret[2]
+                flags = PxLApi.FeatureFlags.AUTO
+                ret = PxLApi.setFeature(self.hCamera, PxLApi.FeatureId.EXPOSURE, flags, params)
         elif task['name'] == "Auto white balance":
-            ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.WHITE_SHADING)
-            assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
+            if self.hCamera is not None:
+                ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.WHITE_SHADING)
+                assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
         print(f"Options for {task['name']}")
         
     def find_mods(self):
-        self.original_image = Image.open("7.bmp")
-        img = np.array(self.original_image.convert('L'))  # Convert to grayscale
-        _, thresh = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
+        img = np.array(self.original_image.convert('L'))
+        bright_mask = img > 100
+        coords = np.column_stack(np.where(bright_mask))
+        if coords.size == 0:
+            self.y = []
+            return
+
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+
+        roi = img[y_min:y_max+1, x_min:x_max+1]
+        _, thresh = cv2.threshold(roi, 100, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        points = []
+        self.y = []
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
+            x += x_min
+            y += y_min
             mask = np.zeros_like(img)
             cv2.drawContours(mask, [contour], -1, 255, -1)
             mean_val = 1/(cv2.mean(img, mask=mask)[0]/(w*h))
@@ -235,12 +284,11 @@ class App(CustomTk):
             cv2.rectangle(img_color, (x, y), (x + w, y + h), (0, 255, 0), 1)
             #cv2.line(img_color, (x + w // 2, 0), (x + w // 2, img_color.shape[0]), (0, 255, 0), 2)
             cv2.putText(img_color, f'{mean_val:.2f}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            points.append((x + w // 2, mean_val))
+            self.y.append((x + w // 2, mean_val))
 
         self.original_image = Image.fromarray(img_color)
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-        return points
 
     def draw_lines_on_image(self):
         if self.image_tk is None:
@@ -279,67 +327,74 @@ class App(CustomTk):
             return line_positions
         return []
 
-    def map_lines_to_spectrum(self, points):
-        fig, ax = plt.subplots(figsize=(5, 2), facecolor=self.DGRAY)
-        ax.set_facecolor(self.DGRAY)
-        x = np.linspace(0, 2048, 2048)
-        y = np.zeros(2048)
-        if points:
-            for i in range(2048):
-                if any(p[0] == i for p in points):
-                    y[i] = next(p[1] for p in points if p[0] == i)
-        ax.plot(x, y, color='darkgreen')
-        ax.grid()
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        canvas = FigureCanvasTkAgg(fig, master=self.c4)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=X, expand=True)
+    def create_spectrum_plot(self):
+        self.fig, self.ax = plt.subplots(figsize=(5, 2), facecolor=self.DGRAY)
+        self.ax.set_facecolor(self.DGRAY)
+        self.x = np.linspace(0, 2048, 2048)
+        self.y = np.zeros(2048)
+        (self.spectrum_line,) = self.ax.plot(self.x, self.y, color='darkgreen')
+        self.ax.grid()
+        self.ax.tick_params(axis='x', colors='white')
+        self.ax.tick_params(axis='y', colors='white')
+        self.spectrum_canvas = FigureCanvasTkAgg(self.fig, master=self.c4)
+        self.spectrum_canvas.draw()
+        self.spectrum_canvas.get_tk_widget().pack(fill=X, expand=True)
         plt.tight_layout()
 
-    def update_video_feed(self):
-        if self.detector and not self.calibrated:
-            direction, frame = self.detector.detect_movement_direction()
-            if direction:
-                self.direction.set(f"Movement: {direction}")
-                if self.connected:
-                    time.sleep(0.1)
-                    self.move('r')
-                    if direction == 'left' or direction == 'right':
-                        lh = self.ports[0]
-                        lv = self.ports[1]
-                    else:
-                        lv = self.ports[1]
-                        lh = self.ports[0]
-                    
-                    self.ports[0] = lh
-                    self.ports[1] = lv
-            self.calibrated = True
-            if self.calibrated:
-                self.detector = cv2.VideoCapture(self.cameraIndex)
-        else:
-            frame = self.detector.read()[1]
-            frame = cv2.flip(frame, 1)
-            if frame is not None:
-                height, width, _ = frame.shape
-                center_x, center_y = width // 2, height // 2
-                cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150,150), 1)  # Horizontal line
-                cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)  # Vertical line
+    def update_spectrum_plot(self):
+        img = np.array(self.original_image.convert('L'))
+        self.y = img.sum(axis=0)/img.shape[0]
+        self.spectrum_line.set_ydata(self.y)
+        y_max = max(self.y)
+        self.ax.set_ylim(0, y_max * 1.1 if y_max > 0 else 1)
+        self.spectrum_canvas.draw()
+        
+    async def update_video_feed(self):
+        while True:
+            if self.detector and not self.calibrated:
+                direction, frame = self.detector.detect_movement_direction()
+                if direction:
+                    self.direction.set(f"Movement: {direction}")
+                    if self.connected:
+                        time.sleep(0.1)
+                        self.move('r')
+                        if direction == 'left' or direction == 'right':
+                            lh = self.ports[0]
+                            lv = self.ports[1]
+                        else:
+                            lv = self.ports[1]
+                            lh = self.ports[0]
+                        
+                        self.ports[0] = lh
+                        self.ports[1] = lv
+                self.calibrated = True
+                if self.calibrated:
+                    self.detector = cv2.VideoCapture(self.cameraIndex)
+            else:
+                frame = self.detector.read()[1]
+                frame = cv2.flip(frame, 1)
+                if frame is not None:
+                    height, width, _ = frame.shape
+                    center_x, center_y = width // 2, height // 2
+                    cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150,150), 1)  # Horizontal line
+                    cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)  # Vertical line
 
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-                self.image = Image.fromarray(rgb_frame)
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+                    self.image = Image.fromarray(rgb_frame)
+                    image_tk = ImageTk.PhotoImage(image=self.image)
+                    self.frame_label.configure(image=image_tk)
+                    self.frame_label.image = image_tk
+            frame = np.zeros([1088,2048], dtype=np.uint8)
+            if self.hCamera is not None:
+                ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
+                self.spec = Image.fromarray(frame)
+                self.original_image = self.spec
                 resized_image = self.original_image.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
                 self.image_tk = ImageTk.PhotoImage(resized_image)
-
                 self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-                image_tk = ImageTk.PhotoImage(image=self.image)
-                self.frame_label.configure(image=image_tk)
-                self.frame_label.image = image_tk
-
-                if self.image_tk is None:
-                    self.draw_lines_on_image()
-        self.after(10, self.update_video_feed)
-        
+                self.update_spectrum_plot()
+            await asyncio.sleep(0.01)
+                  
     def update_sizes(self):
         root_width = self.window.winfo_width()
         root_height = self.window.winfo_height()
@@ -366,15 +421,43 @@ class App(CustomTk):
         
     async def make_sequence(self):
         if self.connected:
-            for i in range(0, options['width'], options['step_x']):
+            import time
+            start = time.time()
+            spectra = []
+            self.move('l', options['width']/2)
+            self.move('d', options['height']/2)
+            await asyncio.sleep(1)
+            xmin = 0
+            xmax = options['width']
+            ymin = 0
+            ymax = options['height']
+            frame_count = 0
+            for i in range(xmin, xmax, options['step_x']):
                 self.move('r', options['step_x'])
                 await asyncio.sleep(1)
-                for j in range(0, options['height'], options['step_y']):
+                for j in range(ymin, ymax, options['step_y']):
                     self.move('u', options['step_y'])
                     await asyncio.sleep(1)
+                    img = np.array(self.original_image.convert('L'))
+                    spectrum = img.sum(axis=0).tolist()
+                    spectra.append([i, j, spectrum])
+                    frame_count += 1
                 self.move('d', options['height'])
-                await asyncio.sleep(1)
-        print("Sequence completed!")
+            elapsed = time.time() - start
+            fps = frame_count / elapsed if elapsed > 0 else 0
+            self.perf_label.config(text=f"Czas sekwencji: {elapsed:.2f} s | FPS: {fps:.2f}")
+            print("Sequence completed!")
+            # Zapisz jako CSV: i, j, spektrum...
+            folder = "pomiar_dane"
+            os.makedirs(folder, exist_ok=True)
+            filename = os.path.join(folder, f"pomiar_{time.strftime('%Y%m%d_%H%M%S')}_spectra.csv")
+            with open(filename, "w", newline="") as f:
+                writer = csv.writer(f)
+                for row in spectra:
+                    writer.writerow([row[0], row[1]] + row[2])
+            print(f"Dane zapisane do: {filename}")
+            self.load_measurements()
+            self.draw_measurements()
 
     def start_sequence(self):
         asyncio.create_task(self.make_sequence())
@@ -402,13 +485,13 @@ class App(CustomTk):
                 self.ports[0].write((f"H:1\r\n").encode())
                 self.ports[1].write((f"H:1\r\n").encode())
 
-    def create_widgets(self):
+    def async_loop(self):
+        self.create_spectrum_plot()
         self.start_camera()
         self.start_spectrometr()
-        self.spectrum()
+        asyncio.create_task(self.update_video_feed())
         self.create_task_list()
         self.bind("<Configure>", lambda e: self.update_sizes())
-        self.find_mods()
         
         Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='lightgray').grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='lightgray')
@@ -417,54 +500,68 @@ class App(CustomTk):
     def start_camera(self):
         if not self.calibrated:
             self.detector = MotionDetector(self.cameraIndex)
-            #self.change_state(self.tasks[0], self.tasks[0]["status"])
         else:
             self.detector = None
-        self.update_video_feed()
         
     def start_spectrometr(self):
-        frame = np.zeros([1088,2048], dtype=np.uint8)
         ret = PxLApi.initialize(0)
         if not(PxLApi.apiSuccess(ret[0])):
             print("Error: Unable to initialize a camera! rc = %i" % ret[0])
+            self.hCamera = None
             return 1
         else:
-            pass
-
-        self.hCamera = ret[1]
+            self.hCamera = ret[1]
         ret = PxLApi.initialize(0, PxLApi.InitializeExFlags.ISSUE_STREAM_STOP)
-        if PxLApi.apiSuccess(ret[0]):
+        if PxLApi.apiSuccess(ret[0]) and self.hCamera is not None:
             ret = PxLApi.loadSettings(self.hCamera, PxLApi.Settings.SETTINGS_FACTORY)
             if not PxLApi.apiSuccess(ret[0]):
                 print("Could not load factory settings!")
             else:
                 print("Factory default settings restored")
+        if self.hCamera is not None:
+            ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
 
-        ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
-
-        if PxLApi.apiSuccess(ret[0]):
-            for i in range(1):            
-                ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
-                self.spec = Image.fromarray(frame)
-                image_tk = ImageTk.PhotoImage(image=self.spec)
-                self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=image_tk)
-
-        PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.STOP)
-        assert PxLApi.apiSuccess(ret[0]), "setStreamState with StreamState.STOP failed"
-
-        PxLApi.uninitialize(self.hCamera)
-        assert PxLApi.apiSuccess(ret[0]), "uninitialize failed"
-        return 0
-    
-    def spectrum(self):
-        points = self.find_mods()
-        self.map_lines_to_spectrum(points)
-        
     def draw_measurements(self):
         for i,n in enumerate(self.measurements):
-            CButton(self.button_frame,text=f'{i}',command=lambda i=i, n=n: HotmapWindow(self,i,n,self.image),width=2,height=1).grid(row=i // 40,column=i%40)
+            CButton(self.button_frame,text=f'{i}',command=lambda i=i, n=n: HeatMapWindow(self,i,n,self.image),width=2,height=1).grid(row=i // 40,column=i%40)
         self.update_canvas()
 
+    def set_y_range(self):
+        try:
+            ymin = float(self.ymin_var.get())
+            ymax = float(self.ymax_var.get())
+            self.ax.set_xlim(ymin, ymax)
+            self.spectrum_canvas.draw()
+        except Exception as e:
+            print(f"Błąd ustawiania zakresu Y: {e}")
+
+    def set_x_range(self):
+        try:
+            xmin = float(self.xmin_var.get())
+            xmax = float(self.xmax_var.get())
+            self.ax.set_xlim(xmin, xmax)
+            self.spectrum_canvas.draw()
+        except Exception as e:
+            print(f"Błąd ustawiania zakresu X: {e}")
+
+    def load_measurements(self):
+        folder = "pomiar_dane"
+        self.measurements = []
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        for filename in sorted(glob.glob(os.path.join(folder, "*_spectra.csv"))):
+            data = []
+            with open(filename, "r") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    data.append([int(row[0]), int(row[1]), [float(x) for x in row[2:]]])
+            self.measurements.append(data)
+            
 if __name__ == "__main__":
     app = App()
+    app.after_idle(app.async_loop)
     async_mainloop(app)
+    if app.hCamera is not None:
+        if PxLApi.StreamState == PxLApi.StreamState.START:
+            PxLApi.setStreamState(app.hCamera, PxLApi.StreamState.STOP)
+            PxLApi.uninitialize(app.hCamera)
