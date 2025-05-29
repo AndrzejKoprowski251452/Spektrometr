@@ -203,24 +203,28 @@ class CustomTk(Tk, CustomWindow):
         self.overrideredirect(True)
         self.config(bg=self.DGRAY, highlightthickness=0)
         self.state('zoomed')
-        self.geometry(f'{self.winfo_width()}x{self.winfo_height()}')
         self.menu_button = CButton(self.title_bar, text=' ≡ ', command=self.show_menu)
         self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7,fill=Y)
-        
+                
         menu = Menu(self, tearoff=0,background='darkgray',foreground='lightgray',activebackground=self.RGRAY,activeforeground='white',bd=0,borderwidth=0,relief='flat')
         menu.config(bg=self.DGRAY,fg='lightgray',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white',disabledforeground='gray')
-        menu.add_command(label="Options", command=lambda: Options(self))
+        menu.add_command(label="Options", command=self.open_options_window)
         self.menu_bar = menu
         
     def show_menu(self):
         self.menu_bar.post(self.menu_button.winfo_rootx(), self.menu_button.winfo_rooty() + self.menu_button.winfo_height())
-
-
+    def open_options_window(self):
+        if self.options_window is not None and self.options_window.winfo_exists():
+            self.options_window.deminimize()
+        else:
+            self.options_window = Options(self)
+            
 class CustomToplevel(Toplevel, CustomWindow):
     def __init__(self, *args, **kwargs):
         Toplevel.__init__(self, *args, **kwargs)
         CustomWindow.__init__(self, *args, **kwargs)
         self.overrideredirect(True)
+        self.window = self
         self.config(bg=self.DGRAY, highlightthickness=0)
         self.iconbitmap("icon.ico")
         
@@ -277,14 +281,11 @@ class HeatMapWindow(CustomToplevel):
         self.geometry('1200x800')
 
         self.image = image
-        # n: lista [i, j, [spektrum]]
         n = np.array(n, dtype=object)
-        # Wyznacz rozmiar siatki
         xs = sorted(set([row[0] for row in n]))
         ys = sorted(set([row[1] for row in n]))
         nx, ny = len(xs), len(ys)
         spectrum_len = len(n[0][2])
-        # Stwórz macierz 3D: [nx, ny, długość_fali]
         self.cube = np.zeros((nx, ny, spectrum_len))
         for row in n:
             ix = xs.index(row[0])
@@ -294,9 +295,9 @@ class HeatMapWindow(CustomToplevel):
 
         self.create_widgets()
         self.update_heatmap()
+        self.update_profile()
 
     def create_widgets(self):
-        # Suwak do wyboru długości fali (indeksu spektrum)
         self.slider = Scale(
             self.window,
             from_=0,
@@ -313,8 +314,10 @@ class HeatMapWindow(CustomToplevel):
         )
         self.slider.pack(fill=X, padx=10, pady=10)
 
-        self.fig = plt.figure(figsize=(8, 6), facecolor=self.DGRAY)
-        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.fig = plt.figure(figsize=(8, 8), facecolor=self.DGRAY)
+        gs = GridSpec(2, 1, height_ratios=[3, 1])
+        self.ax = self.fig.add_subplot(gs[0], projection='3d')
+        self.ax2 = self.fig.add_subplot(gs[1])
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.window)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
@@ -323,25 +326,44 @@ class HeatMapWindow(CustomToplevel):
     def on_slider(self, val):
         self.current_lambda = int(val)
         self.update_heatmap()
+        self.update_profile()
 
     def update_heatmap(self):
         self.ax.clear()
-        # Wyświetl mapę jasności dla wybranej długości fali
         data = self.cube[:, :, self.current_lambda]
         X, Y = np.meshgrid(range(data.shape[0]), range(data.shape[1]))
         self.ax.plot_surface(X, Y, data.T, cmap='hot')
+        self.ax.patch.set_facecolor(self.DGRAY)
         self.ax.set_title(f"Heatmapa 3D dla długości fali {self.current_lambda}", color='white')
         self.ax.set_xlabel("X", color='white')
         self.ax.set_ylabel("Y", color='white')
         self.ax.set_zlabel("Jasność", color='white')
         self.fig.tight_layout()
-        self.canvas.draw()
+        self.canvas.draw_idle()
+
+    def update_profile(self):
+        self.ax2.clear()
+        data = self.cube[:, :, self.current_lambda]
+        profile = data.sum(axis=0)
+        self.ax2.plot(profile, color='orange')
+        self.ax2.set_title("Profil modów (suma po X)", color='white')
+        self.ax2.set_xlabel("Y", color='white')
+        self.ax2.set_ylabel("Jasność", color='white')
+        self.ax2.tick_params(axis='x', colors='white')
+        self.ax2.tick_params(axis='y', colors='white')
+        self.ax2.set_facecolor(self.DGRAY)
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
 
 class Options(CustomToplevel):
-    def __init__(self, parent):
-        CustomToplevel.__init__(self, parent)
+    def __init__(self,parent):
+        CustomToplevel.__init__(self,parent)
         self.geometry('1200x800')
         self.set_title("Options")
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.parent = parent
+        self.parent.options_window = self
 
         self.step_x = IntVar(value=config['step_x'])
         self.step_y = IntVar(value=config['step_y'])
@@ -354,7 +376,10 @@ class Options(CustomToplevel):
             w.config(bg=self.DGRAY, fg='lightgray', highlightbackground='white')
             for w in w.winfo_children():
                 w.config(bg=self.DGRAY, fg='lightgray', highlightbackground='white')
-
+    def on_close(self):
+        self.parent.options_window = None
+        self.destroy()
+    
     def create_options(self):
         frame = Frame(self.window, bg=self.DGRAY)
         frame.pack(fill=BOTH, expand=True, padx=20, pady=20)

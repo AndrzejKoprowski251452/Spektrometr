@@ -22,11 +22,13 @@ options = json.load(open('options.json'))
 class App(CustomTk):
     def __init__(self, *args, **kwargs):
         CustomTk.__init__(self,*args, **kwargs)
-        self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+        self.state('zoomed')
         self.set_title("Arczy Puszka")
         self.iconbitmap("icon.ico")
         
         sys.stdout = StreamToFunction(self.console_data)
+        
+        self.options_window = None
 
         self.c1 = LabelFrame(self.window,text='Camera')
         self.c2 = LabelFrame(self.window,text='Controls')
@@ -47,9 +49,8 @@ class App(CustomTk):
         self.spectrometr_canvas.pack(expand=True, fill=BOTH)
         
         self.original_image = Image.open("3.bmp")
-        self.image_tk = ImageTk.PhotoImage(self.original_image)
+        self.image_tk = None 
         self.spectrometr_image = self.spectrometr_canvas.create_image(0, 0, anchor="nw", image=self.image_tk)
-        self.image_tk = None
         self.scale = 1.0
         
         self.left = CButton(self.c1,text='←',width=2,height=1,command=lambda :self.move('l'))
@@ -110,20 +111,15 @@ class App(CustomTk):
             for i in serial.tools.list_ports.comports():
                 print(i[0])
                 if i[0] == 'COM5' or i[0] == 'COM9':
-                    
                     s = serial.Serial(i[0])
-                    s.baudrate=9600
-                    s.BYTESIZES=serial.EIGHTBITS
-                    s.PARITIES=serial.PARITY_NONE
-                    s.STOPBITS=serial.STOPBITS_ONE
-                    s.timeout=1
-                    s.rtscts=True
                     self.ports.append(s)
         else:
             self.connected = False
             
         self.update_colors()
         self.draw_measurements()
+        
+        self.bind("<Configure>",lambda e: self.update_sizes())
         self.update_sizes()
         
         self.spectrometr_canvas.bind("<MouseWheel>", self.zoom)
@@ -142,7 +138,6 @@ class App(CustomTk):
         self.xmax_entry.grid(row=3, column=1, sticky="w", padx=5)
 
         CButton(self.c2, text="Ustaw zakres X", command=self.set_x_range).grid(row=4, column=0, columnspan=2, pady=5)
-        
         
     def zoom(self, event):
         if event.delta > 0 and self.scale < 4:
@@ -257,75 +252,75 @@ class App(CustomTk):
                 assert PxLApi.apiSuccess(ret[0]), "%i" % ret[0]
         print(f"Options for {task['name']}")
         
-    def find_mods(self):
-        img = np.array(self.original_image.convert('L'))
-        bright_mask = img > 100
-        coords = np.column_stack(np.where(bright_mask))
-        if coords.size == 0:
-            self.y = []
-            return
+    # def find_mods(self):
+    #     img = np.array(self.original_image.convert('L'))
+    #     bright_mask = img > 100
+    #     coords = np.column_stack(np.where(bright_mask))
+    #     if coords.size == 0:
+    #         self.y = []
+    #         return
 
-        y_min, x_min = coords.min(axis=0)
-        y_max, x_max = coords.max(axis=0)
+    #     y_min, x_min = coords.min(axis=0)
+    #     y_max, x_max = coords.max(axis=0)
 
-        roi = img[y_min:y_max+1, x_min:x_max+1]
-        _, thresh = cv2.threshold(roi, 100, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        self.y = []
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            x += x_min
-            y += y_min
-            mask = np.zeros_like(img)
-            cv2.drawContours(mask, [contour], -1, 255, -1)
-            mean_val = 1/(cv2.mean(img, mask=mask)[0]/(w*h))
+    #     roi = img[y_min:y_max+1, x_min:x_max+1]
+    #     _, thresh = cv2.threshold(roi, 100, 255, cv2.THRESH_BINARY)
+    #     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    #     img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    #     self.y = []
+    #     for contour in contours:
+    #         x, y, w, h = cv2.boundingRect(contour)
+    #         x += x_min
+    #         y += y_min
+    #         mask = np.zeros_like(img)
+    #         cv2.drawContours(mask, [contour], -1, 255, -1)
+    #         mean_val = 1/(cv2.mean(img, mask=mask)[0]/(w*h))
 
-            cv2.rectangle(img_color, (x, y), (x + w, y + h), (0, 255, 0), 1)
-            #cv2.line(img_color, (x + w // 2, 0), (x + w // 2, img_color.shape[0]), (0, 255, 0), 2)
-            cv2.putText(img_color, f'{mean_val:.2f}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            self.y.append((x + w // 2, mean_val))
+    #         cv2.rectangle(img_color, (x, y), (x + w, y + h), (0, 255, 0), 1)
+    #         #cv2.line(img_color, (x + w // 2, 0), (x + w // 2, img_color.shape[0]), (0, 255, 0), 2)
+    #         cv2.putText(img_color, f'{mean_val:.2f}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    #         self.y.append((x + w // 2, mean_val))
 
-        self.original_image = Image.fromarray(img_color)
-        self.image_tk = ImageTk.PhotoImage(self.original_image)
-        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+    #     self.original_image = Image.fromarray(img_color)
+    #     self.image_tk = ImageTk.PhotoImage(self.original_image)
+    #     self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
 
-    def draw_lines_on_image(self):
-        if self.image_tk is None:
-            image_array = np.array(self.original_image)
+    # def draw_lines_on_image(self):
+    #     if self.image_tk is None:
+    #         image_array = np.array(self.original_image)
             
-            if len(image_array.shape) == 3 and image_array.shape[2] == 4:
-                gray_image = cv2.cvtColor(image_array, cv2.COLOR_RGBA2GRAY)
-            elif len(image_array.shape) == 3 and image_array.shape[2] == 3:
-                gray_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-            else:
-                gray_image = image_array
-            gray_image = cv2.GaussianBlur(gray_image, (13, 13), 0)
-            gray_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    #         if len(image_array.shape) == 3 and image_array.shape[2] == 4:
+    #             gray_image = cv2.cvtColor(image_array, cv2.COLOR_RGBA2GRAY)
+    #         elif len(image_array.shape) == 3 and image_array.shape[2] == 3:
+    #             gray_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+    #         else:
+    #             gray_image = image_array
+    #         gray_image = cv2.GaussianBlur(gray_image, (13, 13), 0)
+    #         gray_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-            grad = cv2.Sobel(gray_image, cv2.CV_8U, 1, 0, ksize=5)
-            grad = cv2.morphologyEx(grad, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), grad)
-            line_image = np.zeros_like(grad)
-            contours, _ = cv2.findContours(grad, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            line_positions = []
-            for contour in contours:
-                if len(contour) > 0:
-                    rect = cv2.minAreaRect(contour)
-                    box = cv2.boxPoints(rect)
-                    box = np.int32(box)
-                    x1 = (box[0][0] + box[3][0]) // 2
-                    y1 = (box[0][1] + box[3][1]) // 2
-                    x2 = (box[1][0] + box[2][0]) // 2
-                    y2 = (box[1][1] + box[2][1]) // 2
-                    cv2.line(line_image, (x1, y1), (x2, y2), (255), 1)
-                    line_positions.append((x1, y1, x2, y2))
-            img = Image.fromarray(line_image)
-            img = img.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
-            self.image_tk = ImageTk.PhotoImage(img)
-            self.original_image = img
-            self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-            return line_positions
-        return []
+    #         grad = cv2.Sobel(gray_image, cv2.CV_8U, 1, 0, ksize=5)
+    #         grad = cv2.morphologyEx(grad, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), grad)
+    #         line_image = np.zeros_like(grad)
+    #         contours, _ = cv2.findContours(grad, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    #         line_positions = []
+    #         for contour in contours:
+    #             if len(contour) > 0:
+    #                 rect = cv2.minAreaRect(contour)
+    #                 box = cv2.boxPoints(rect)
+    #                 box = np.int32(box)
+    #                 x1 = (box[0][0] + box[3][0]) // 2
+    #                 y1 = (box[0][1] + box[3][1]) // 2
+    #                 x2 = (box[1][0] + box[2][0]) // 2
+    #                 y2 = (box[1][1] + box[2][1]) // 2
+    #                 cv2.line(line_image, (x1, y1), (x2, y2), (255), 1)
+    #                 line_positions.append((x1, y1, x2, y2))
+    #         img = Image.fromarray(line_image)
+    #         img = img.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
+    #         self.image_tk = ImageTk.PhotoImage(img)
+    #         self.original_image = img
+    #         self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
+    #         return line_positions
+    #     return []
 
     def create_spectrum_plot(self):
         self.fig, self.ax = plt.subplots(figsize=(5, 2), facecolor=self.DGRAY)
@@ -356,7 +351,7 @@ class App(CustomTk):
                 if direction:
                     self.direction.set(f"Movement: {direction}")
                     if self.connected:
-                        time.sleep(0.1)
+                        asyncio.sleep(0.1)
                         self.move('r')
                         if direction == 'left' or direction == 'right':
                             lh = self.ports[0]
@@ -367,7 +362,7 @@ class App(CustomTk):
                         
                         self.ports[0] = lh
                         self.ports[1] = lv
-                self.calibrated = True
+                        self.calibrated = True
                 if self.calibrated:
                     self.detector = cv2.VideoCapture(self.cameraIndex)
             else:
@@ -420,6 +415,7 @@ class App(CustomTk):
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
         
     async def make_sequence(self):
+        options = json.load(open('options.json'))
         if self.connected:
             import time
             start = time.time()
@@ -438,23 +434,23 @@ class App(CustomTk):
                 for j in range(ymin, ymax, options['step_y']):
                     self.move('u', options['step_y'])
                     await asyncio.sleep(1)
-                    img = np.array(self.original_image.convert('L'))
-                    spectrum = img.sum(axis=0).tolist()
-                    spectra.append([i, j, spectrum])
+                    x_min = int(self.xmin_var.get())
+                    x_max = int(self.xmax_var.get())
+                    spectrum = self.y[x_min:x_max].tolist()
+                    spectra.append([i, j] + spectrum)
                     frame_count += 1
                 self.move('d', options['height'])
             elapsed = time.time() - start
             fps = frame_count / elapsed if elapsed > 0 else 0
-            self.perf_label.config(text=f"Czas sekwencji: {elapsed:.2f} s | FPS: {fps:.2f}")
-            print("Sequence completed!")
-            # Zapisz jako CSV: i, j, spektrum...
+            print("Sequence completed! : {} frames in {:.2f} seconds, FPS: {:.2f}".format(frame_count, elapsed, fps))
+            print(f"Zebrano {len(spectra)} pomiarów.")
             folder = "pomiar_dane"
             os.makedirs(folder, exist_ok=True)
             filename = os.path.join(folder, f"pomiar_{time.strftime('%Y%m%d_%H%M%S')}_spectra.csv")
             with open(filename, "w", newline="") as f:
                 writer = csv.writer(f)
                 for row in spectra:
-                    writer.writerow([row[0], row[1]] + row[2])
+                    writer.writerow(row)
             print(f"Dane zapisane do: {filename}")
             self.load_measurements()
             self.draw_measurements()
@@ -491,11 +487,15 @@ class App(CustomTk):
         self.start_spectrometr()
         asyncio.create_task(self.update_video_feed())
         self.create_task_list()
-        self.bind("<Configure>", lambda e: self.update_sizes())
+        
+        self.image_tk = ImageTk.PhotoImage(self.original_image)
+        self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
         
         Label(self.c1, text="Detected Movement Direction:",background=self.DGRAY,fg='lightgray').grid(row=0,column=0)
         self.direction_label = Label(self.c1, textvariable=self.direction,background=self.DGRAY,fg='lightgray')
         self.direction_label.grid(row=0,column=1)
+        
+        self.set_x_range()
 
     def start_camera(self):
         if not self.calibrated:
@@ -526,15 +526,6 @@ class App(CustomTk):
             CButton(self.button_frame,text=f'{i}',command=lambda i=i, n=n: HeatMapWindow(self,i,n,self.image),width=2,height=1).grid(row=i // 40,column=i%40)
         self.update_canvas()
 
-    def set_y_range(self):
-        try:
-            ymin = float(self.ymin_var.get())
-            ymax = float(self.ymax_var.get())
-            self.ax.set_xlim(ymin, ymax)
-            self.spectrum_canvas.draw()
-        except Exception as e:
-            print(f"Błąd ustawiania zakresu Y: {e}")
-
     def set_x_range(self):
         try:
             xmin = float(self.xmin_var.get())
@@ -554,12 +545,15 @@ class App(CustomTk):
             with open(filename, "r") as f:
                 reader = csv.reader(f)
                 for row in reader:
-                    data.append([int(row[0]), int(row[1]), [float(x) for x in row[2:]]])
-            self.measurements.append(data)
-            
+                    x = int(row[0])
+                    y = int(row[1])
+                    spectrum = [float(v) for v in row[2:]]
+                    data.append([x, y, spectrum])
+        self.measurements.append(data)            
 if __name__ == "__main__":
     app = App()
     app.after_idle(app.async_loop)
+    app.after_idle(app.update_sizes)
     async_mainloop(app)
     if app.hCamera is not None:
         if PxLApi.StreamState == PxLApi.StreamState.START:
