@@ -623,8 +623,8 @@ class App(CustomTk):
             self.image_tk = ImageTk.PhotoImage(resized_image)
             canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
             scale_ratio = self.scale / old_scale
-            canvas.xview_moveto((x * scale_ratio - event.x) / (resized_image.width - canvas.winfo_width()))
-            canvas.yview_moveto((y * scale_ratio - event.y) / (resized_image.height - canvas.winfo_height()))
+            canvas.xview_moveto((event.x+x)*self.scale)
+            canvas.yview_moveto((event.y+y)*self.scale)
 
     def start_pan(self, event):
         self.spectrometr_canvas.scan_mark(event.x, event.y)
@@ -804,6 +804,12 @@ class App(CustomTk):
         self.spectrum_canvas = FigureCanvasTkAgg(self.fig, master=self.c4)
         self.spectrum_canvas.draw()
         self.spectrum_canvas.get_tk_widget().pack(fill=BOTH, expand=True, pady=(10, 0), padx=10)
+        self.spectrum_canvas.mpl_connect('scroll_event', self.spectrum_zoom)
+        self.spectrum_canvas.mpl_connect('motion_notify_event', self.spectrum_pan)
+        self.spectrum_canvas.mpl_connect('button_press_event', self.spectrum_pan_start)
+        self.spectrum_canvas.mpl_connect('motion_notify_event', self.spectrum_pan)
+        self.spectrum_canvas.mpl_connect('button_release_event', self.spectrum_pan_stop)
+        self._pan_start = None
 
     def update_spectrum_plot(self):
         img = np.array(self.original_image.convert('L'))
@@ -811,8 +817,58 @@ class App(CustomTk):
         self.spectrum_line.set_ydata(self.y)
         y_max = max(self.y)
         self.ax.set_ylim(0, y_max * 1.1 if y_max > 0 else 1)
+
+        if hasattr(self, "_spectrum_vlines"):
+            for l in self._spectrum_vlines:
+                try:
+                    l.remove()
+                except Exception:
+                    pass
+
+        xmin = float(self.xmin_var.get())
+        xmax = float(self.xmax_var.get())
+        vline1 = self.ax.axvline(xmin, color='red', linestyle='--')
+        vline2 = self.ax.axvline(xmax, color='red', linestyle='--')
+        self._spectrum_vlines = [vline1, vline2]
+
         self.spectrum_canvas.draw()
-        
+    
+    def spectrum_zoom(self, event):
+        ax = self.ax
+        x_min, x_max = ax.get_xlim()
+        zoom_factor = 0.8 if event.button == 'up' else 1.25
+        xdata = event.xdata
+        if xdata is None:
+            return
+        new_xmin = xdata - (xdata - x_min) * zoom_factor
+        new_xmax = xdata + (x_max - xdata) * zoom_factor
+        ax.set_xlim(new_xmin, new_xmax)
+        self.update_spectrum_plot()
+
+    def spectrum_pan_start(self, event):
+        if event.button == 1 and event.xdata is not None:
+            self._pan_start = event.xdata
+
+    def spectrum_pan(self, event):
+        if self._pan_start is not None and event.button == 1 and event.xdata is not None:
+            dx = self._pan_start - event.xdata
+            x_min, x_max = self.ax.get_xlim()
+            self.ax.set_xlim(x_min + dx, x_max + dx)
+            if hasattr(self, "_spectrum_vlines"):
+                for l in self._spectrum_vlines:
+                    try:
+                        l.remove()
+                    except Exception:
+                        pass
+            self.spectrum_canvas.draw()
+            self._pan_start = event.xdata
+        elif event.button != 1:
+            self._pan_start = None
+
+    def spectrum_pan_stop(self, event):
+        self._pan_start = None
+        self.update_spectrum_plot()
+
     async def update_video_feed(self):
         while True:
             if self.detector and not self.calibrated:
@@ -844,6 +900,7 @@ class App(CustomTk):
                     cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)  # Vertical line
 
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+            rgb_frame = cv2.resize(rgb_frame, (int(self.winfo_width()), int(self.winfo_height())))
             self.image = Image.fromarray(rgb_frame)
             image_tk = ImageTk.PhotoImage(image=self.image)
             self.frame_label.configure(image=image_tk)
