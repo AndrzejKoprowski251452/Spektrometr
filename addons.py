@@ -72,8 +72,15 @@ class CustomWindow:
         self.after(10, lambda: self.set_appwindow())
       
     def update_colors(self):  
-        for w in self.window.winfo_children():
-            w.config(bg=self.DGRAY,fg='lightgray',highlightbackground='white')
+        def set_colors(widget):
+            if isinstance(widget, (Label, Button, Entry, Text, Frame,LabelFrame, Toplevel, Canvas, Scrollbar)):
+                try:
+                    widget.config(bg=self.DGRAY, fg='lightgray', highlightbackground='white')
+                except Exception:
+                    pass
+            for child in widget.winfo_children():
+                set_colors(child)
+        set_colors(self.window)
         
     def get_pos(self,event):
         xwin = self.winfo_x()

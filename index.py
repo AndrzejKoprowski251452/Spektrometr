@@ -374,11 +374,11 @@ class App(CustomTk):
                     cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150,150), 1)  # Horizontal line
                     cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)  # Vertical line
 
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-                    self.image = Image.fromarray(rgb_frame)
-                    image_tk = ImageTk.PhotoImage(image=self.image)
-                    self.frame_label.configure(image=image_tk)
-                    self.frame_label.image = image_tk
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+            self.image = Image.fromarray(rgb_frame)
+            image_tk = ImageTk.PhotoImage(image=self.image)
+            self.frame_label.configure(image=image_tk)
+            self.frame_label.image = image_tk
             frame = np.zeros([1088,2048], dtype=np.uint8)
             if self.hCamera is not None:
                 ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
@@ -558,7 +558,8 @@ class App(CustomTk):
                         data.append([x, y, spectrum])
                     except Exception as e:
                         print(f"Pominięto wiersz z błędem: {row} ({e})")
-            self.measurements.append(data)            
+            self.measurements.append(data)   
+                     
 if __name__ == "__main__":
     app = App()
     app.after_idle(app.async_loop)
