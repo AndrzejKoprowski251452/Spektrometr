@@ -88,7 +88,7 @@ class App(CustomTk):
         self.detector = None
         self.direction = StringVar(value="No movement detected")
         
-        self.measurements = [1]
+        self.measurements = []
         self.bin = []
         
         self.tasks = [
@@ -126,8 +126,8 @@ class App(CustomTk):
         self.spectrometr_canvas.bind("<ButtonPress-1>", self.start_pan)
         self.spectrometr_canvas.bind("<B1-Motion>", self.pan)
         
-        self.xmin_var = StringVar(value="1000")
-        self.xmax_var = StringVar(value="1200")
+        self.xmin_var = StringVar(value=options['xmin'])
+        self.xmax_var = StringVar(value=options['xmax'])
         
         Label(self.c2, text="X min:", bg=self.DGRAY, fg='lightgray').grid(row=2, column=0, sticky="w", padx=5)
         self.xmin_entry = Entry(self.c2, textvariable=self.xmin_var, width=8)
@@ -351,7 +351,7 @@ class App(CustomTk):
                 if direction:
                     self.direction.set(f"Movement: {direction}")
                     if self.connected:
-                        asyncio.sleep(0.1)
+                        await asyncio.sleep(0.1)
                         self.move('r')
                         if direction == 'left' or direction == 'right':
                             lh = self.ports[0]
@@ -422,7 +422,7 @@ class App(CustomTk):
             spectra = []
             self.move('l', options['width']/2)
             self.move('d', options['height']/2)
-            await asyncio.sleep(1)
+            await asyncio.sleep(options["await"])
             xmin = 0
             xmax = options['width']
             ymin = 0
@@ -430,15 +430,16 @@ class App(CustomTk):
             frame_count = 0
             for i in range(xmin, xmax, options['step_x']):
                 self.move('r', options['step_x'])
-                await asyncio.sleep(1)
+                await asyncio.sleep(options["await"])
                 for j in range(ymin, ymax, options['step_y']):
                     self.move('u', options['step_y'])
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(options["await"])
                     x_min = int(self.xmin_var.get())
                     x_max = int(self.xmax_var.get())
                     spectrum = self.y[x_min:x_max].tolist()
                     spectra.append([i, j] + spectrum)
                     frame_count += 1
+                    print(f"Frame {frame_count}: x={i}, y={j}")
                 self.move('d', options['height'])
             elapsed = time.time() - start
             fps = frame_count / elapsed if elapsed > 0 else 0
@@ -454,6 +455,8 @@ class App(CustomTk):
             print(f"Dane zapisane do: {filename}")
             self.load_measurements()
             self.draw_measurements()
+            spectra.clear()
+            self.move('o')
 
     def start_sequence(self):
         asyncio.create_task(self.make_sequence())
@@ -487,6 +490,7 @@ class App(CustomTk):
         self.start_spectrometr()
         asyncio.create_task(self.update_video_feed())
         self.create_task_list()
+        self.load_measurements()
         
         self.image_tk = ImageTk.PhotoImage(self.original_image)
         self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
@@ -545,11 +549,16 @@ class App(CustomTk):
             with open(filename, "r") as f:
                 reader = csv.reader(f)
                 for row in reader:
-                    x = int(row[0])
-                    y = int(row[1])
-                    spectrum = [float(v) for v in row[2:]]
-                    data.append([x, y, spectrum])
-        self.measurements.append(data)            
+                    if len(row) < 3:
+                        continue
+                    try:
+                        x = int(row[0])
+                        y = int(row[1])
+                        spectrum = [float(v) for v in row[2:]]
+                        data.append([x, y, spectrum])
+                    except Exception as e:
+                        print(f"Pominięto wiersz z błędem: {row} ({e})")
+            self.measurements.append(data)            
 if __name__ == "__main__":
     app = App()
     app.after_idle(app.async_loop)

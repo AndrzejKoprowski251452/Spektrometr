@@ -285,6 +285,8 @@ class HeatMapWindow(CustomToplevel):
         xs = sorted(set([row[0] for row in n]))
         ys = sorted(set([row[1] for row in n]))
         nx, ny = len(xs), len(ys)
+        self.xmin = parent.xmin_var.get() if hasattr(parent, "xmin_var") else 0
+        self.xmax = parent.xmax_var.get() if hasattr(parent, "xmax_var") else 0
         spectrum_len = len(n[0][2])
         self.cube = np.zeros((nx, ny, spectrum_len))
         for row in n:
@@ -292,6 +294,8 @@ class HeatMapWindow(CustomToplevel):
             iy = ys.index(row[1])
             self.cube[ix, iy, :] = row[2]
         self.current_lambda = 0
+
+        self.lambdas = np.linspace(int(self.xmin), int(self.xmax), spectrum_len)
 
         self.create_widgets()
         self.update_heatmap()
@@ -310,7 +314,8 @@ class HeatMapWindow(CustomToplevel):
             borderwidth=0,
             highlightthickness=1,
             highlightbackground=self.MGRAY,
-            highlightcolor=self.LGRAY
+            highlightcolor=self.LGRAY,
+            length=600
         )
         self.slider.pack(fill=X, padx=10, pady=10)
 
@@ -334,7 +339,8 @@ class HeatMapWindow(CustomToplevel):
         X, Y = np.meshgrid(range(data.shape[0]), range(data.shape[1]))
         self.ax.plot_surface(X, Y, data.T, cmap='hot')
         self.ax.patch.set_facecolor(self.DGRAY)
-        self.ax.set_title(f"Heatmapa 3D dla długości fali {self.current_lambda}", color='white')
+        lambda_val = self.lambdas[self.current_lambda]
+        self.ax.set_title(f"Heatmapa 3D dla długości fali {lambda_val:.0f}", color='white')
         self.ax.set_xlabel("X", color='white')
         self.ax.set_ylabel("Y", color='white')
         self.ax.set_zlabel("Jasność", color='white')
@@ -343,15 +349,17 @@ class HeatMapWindow(CustomToplevel):
 
     def update_profile(self):
         self.ax2.clear()
-        data = self.cube[:, :, self.current_lambda]
-        profile = data.sum(axis=0)
-        self.ax2.plot(profile, color='orange')
-        self.ax2.set_title("Profil modów (suma po X)", color='white')
-        self.ax2.set_xlabel("Y", color='white')
+        mean_profile = self.cube.mean(axis=(0,1))
+        self.ax2.plot(self.lambdas, mean_profile, color='orange', label="Spektrum (średnia)")
+        lambda_val = self.lambdas[self.current_lambda]
+        self.ax2.axvline(lambda_val, color='red', linestyle='--', label=f"λ={lambda_val:.0f}")
+        self.ax2.set_title("Profil modów (pełne spektrum)", color='white')
+        self.ax2.set_xlabel("Długość fali (pixel lub nm)", color='white')
         self.ax2.set_ylabel("Jasność", color='white')
         self.ax2.tick_params(axis='x', colors='white')
         self.ax2.tick_params(axis='y', colors='white')
         self.ax2.set_facecolor(self.DGRAY)
+        self.ax2.legend(facecolor=self.DGRAY, edgecolor='gray', labelcolor='white')
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
@@ -429,6 +437,9 @@ class Options(CustomToplevel):
             "offset": self.offset.get(),
             "width": self.square_width.get(),
             "height": self.square_height.get(),
+            "await":0.01,
+            "xmin": self.parent.xmin_var.get(),
+            "xmax": self.parent.xmax_var.get(),
         }
         with open('options.json', 'w') as f:
             json.dump(settings, f, indent=4)
