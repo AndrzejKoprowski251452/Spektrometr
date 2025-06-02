@@ -219,21 +219,6 @@ class CustomTk(Tk, CustomWindow):
         self.overrideredirect(True)
         self.config(bg=self.DGRAY, highlightthickness=0)
         self.state('zoomed')
-        self.menu_button = CButton(self.title_bar, text=' ≡ ', command=self.show_menu)
-        self.menu_button.pack(side=LEFT,before=self.title_bar_title, ipadx=7,fill=Y)
-                
-        menu = Menu(self, tearoff=0,background='darkgray',foreground='lightgray',activebackground=self.RGRAY,activeforeground='white',bd=0,borderwidth=0,relief='flat')
-        menu.config(bg=self.DGRAY,fg='lightgray',relief='flat',bd=0,borderwidth=0,activebackground=self.RGRAY,activeforeground='white',disabledforeground='gray')
-        menu.add_command(label="Options", command=self.open_options_window)
-        self.menu_bar = menu
-        
-    def show_menu(self):
-        self.menu_bar.post(self.menu_button.winfo_rootx(), self.menu_button.winfo_rooty() + self.menu_button.winfo_height())
-    def open_options_window(self):
-        if self.options_window is not None and self.options_window.winfo_exists():
-            self.options_window.deminimize()
-        else:
-            self.options_window = Options(self)
             
 class CustomToplevel(Toplevel, CustomWindow):
     def __init__(self, *args, **kwargs):
@@ -385,87 +370,6 @@ class HeatMapWindow(CustomToplevel):
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
-class Options(CustomToplevel):
-    def __init__(self,parent):
-        CustomToplevel.__init__(self,parent)
-        self.geometry('1200x800')
-        self.set_title("Options")
-        
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.parent = parent
-        self.parent.options_window = self
-
-        self.step_x = IntVar(value=options['step_x'])
-        self.step_y = IntVar(value=options['step_y'])
-        self.offset = IntVar(value=options['offset'])
-        self.square_width = IntVar(value=options['width'])
-        self.square_height = IntVar(value=options['height'])
-
-        self.create_options()
-        for w in self.winfo_children():
-            w.options(bg=self.DGRAY, fg='white', highlightbackground='white')
-            for w in w.winfo_children():
-                w.options(bg=self.DGRAY, fg='white', highlightbackground='white')
-    def on_close(self):
-        self.parent.options_window = None
-        self.destroy()
-    
-    def create_options(self):
-        frame = Frame(self.window, bg=self.DGRAY)
-        frame.pack(fill=BOTH, expand=True, padx=20, pady=20)
-
-        Label(frame, text="Options", font=("Helvetica", 16, "bold"), bg=self.DGRAY, fg='white').grid(row=0, column=0, columnspan=2, pady=(0, 20))
-
-        Label(frame, text="Step X:", bg=self.DGRAY, fg='white').grid(row=1, column=0, sticky=W, pady=5)
-        self.step_x_entry = Entry(frame, textvariable=self.step_x, bg=self.RGRAY, fg='white', insertbackground='white')
-        self.step_x_entry.grid(row=1, column=1, sticky=EW, pady=5)
-
-        Label(frame, text="Step Y:", bg=self.DGRAY, fg='white').grid(row=2, column=0, sticky=W, pady=5)
-        self.step_y_entry = Entry(frame, textvariable=self.step_y, bg=self.RGRAY, fg='white', insertbackground='white')
-        self.step_y_entry.grid(row=2, column=1, sticky=EW, pady=5)
-
-        Label(frame, text="Offset:", bg=self.DGRAY, fg='white').grid(row=3, column=0, sticky=W, pady=5)
-        self.offset_entry = Entry(frame, textvariable=self.offset, bg=self.RGRAY, fg='white', insertbackground='white')
-        self.offset_entry.grid(row=3, column=1, sticky=EW, pady=5)
-
-        Label(frame, text="Square Width:", bg=self.DGRAY, fg='white').grid(row=4, column=0, sticky=W, pady=5)
-        self.square_width_entry = Entry(frame, textvariable=self.square_width, bg=self.RGRAY, fg='white', insertbackground='white')
-        self.square_width_entry.grid(row=4, column=1, sticky=EW, pady=5)
-
-        Label(frame, text="Square Height:", bg=self.DGRAY, fg='white').grid(row=5, column=0, sticky=W, pady=5)
-        self.square_height_entry = Entry(frame, textvariable=self.square_height, bg=self.RGRAY, fg='white', insertbackground='white')
-        self.square_height_entry.grid(row=5, column=1, sticky=EW, pady=5)
-
-        button_frame = Frame(frame, bg=self.DGRAY)
-        button_frame.grid(row=6, column=0, columnspan=2, pady=20)
-
-        CButton(button_frame, text="Import Settings", command=self.import_settings).pack(side=LEFT, padx=10)
-        CButton(button_frame, text="Apply", command=self.apply_settings).pack(side=LEFT, padx=10)
-
-        frame.columnconfigure(1, weight=1)
-
-    def import_settings(self):
-        global options
-        file_path = filedialog.askopenfilename(title="Select Settings File", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
-        if file_path:
-            options = json.load(open(file_path))
-            print(f"Importing settings from {file_path}")
-        self.focus()
-
-    def apply_settings(self):
-        settings = {
-            "step_x": self.step_x.get(),
-            "step_y": self.step_y.get(),
-            "offset": self.offset.get(),
-            "width": self.square_width.get(),
-            "height": self.square_height.get(),
-            "await":0.01,
-            "xmin": self.parent.xmin_var.get(),
-            "xmax": self.parent.xmax_var.get(),
-        }
-        with open('options.json', 'w') as f:
-            json.dump(settings, f, indent=4)
-
 class App(CustomTk):
     def __init__(self):
         super().__init__()
@@ -491,19 +395,27 @@ class App(CustomTk):
         self.options_window = None
         
         sys.stdout = StreamToFunction(self.console_data)
+        
+        self.step_x = IntVar(value=options['step_x'])
+        self.step_y = IntVar(value=options['step_y'])
+        self.offset = IntVar(value=options['offset'])
+        self.square_width = IntVar(value=options['width'])
+        self.square_height = IntVar(value=options['height'])
 
         self.c1 = Frame(self.notebook, bg=self.DGRAY)
         self.c2 = Frame(self.notebook, bg=self.DGRAY)
         self.c3 = Frame(self.notebook, bg=self.DGRAY)
         self.c4 = Frame(self.notebook, bg=self.DGRAY)
         self.c5 = Frame(self.notebook, bg=self.DGRAY)
+        self.c6 = Frame(self.notebook, bg=self.DGRAY)
 
         self.notebook.add(self.c1, text="Camera")
         self.notebook.add(self.c2, text="Controls")
         self.notebook.add(self.c3, text="Spectrometr View")
         self.notebook.add(self.c4, text="Spectrum")
         self.notebook.add(self.c5, text="Results")
-        
+        self.notebook.add(self.c6, text="Settings")
+
         self.tasks_frame = Frame(self.c2, bg=self.DGRAY)
         self.tasks_frame.pack(fill=X, padx=10, pady=(0, 10))
         
@@ -587,6 +499,7 @@ class App(CustomTk):
         self.calibrated = False
             
         self.update_colors()
+        self.create_options()
         
         self.spectrometr_canvas.bind("<MouseWheel>", self.zoom)
         self.spectrometr_canvas.bind("<ButtonPress-1>", self.start_pan)
@@ -606,6 +519,88 @@ class App(CustomTk):
         self.hCamera = None
         
         self.draw_measurements()
+        
+    def create_options(self):
+        frame = Frame(self.c6, bg=self.DGRAY)
+        frame.pack(fill=BOTH, expand=True, padx=20, pady=20)
+
+        Label(frame, text="Options", font=("Helvetica", 16, "bold"), bg=self.DGRAY, fg='white').grid(row=0, column=0, columnspan=2, pady=(0, 20))
+
+        Label(frame, text="Step X:", bg=self.DGRAY, fg='white').grid(row=1, column=0, sticky=W, pady=5)
+        self.step_x_entry = Entry(frame, textvariable=self.step_x, bg=self.RGRAY, fg='white', insertbackground='white')
+        self.step_x_entry.grid(row=1, column=1, sticky=EW, pady=5)
+
+        Label(frame, text="Step Y:", bg=self.DGRAY, fg='white').grid(row=2, column=0, sticky=W, pady=5)
+        self.step_y_entry = Entry(frame, textvariable=self.step_y, bg=self.RGRAY, fg='white', insertbackground='white')
+        self.step_y_entry.grid(row=2, column=1, sticky=EW, pady=5)
+
+        Label(frame, text="Offset:", bg=self.DGRAY, fg='white').grid(row=3, column=0, sticky=W, pady=5)
+        self.offset_entry = Entry(frame, textvariable=self.offset, bg=self.RGRAY, fg='white', insertbackground='white')
+        self.offset_entry.grid(row=3, column=1, sticky=EW, pady=5)
+
+        Label(frame, text="Square Width:", bg=self.DGRAY, fg='white').grid(row=4, column=0, sticky=W, pady=5)
+        self.square_width_entry = Entry(frame, textvariable=self.square_width, bg=self.RGRAY, fg='white', insertbackground='white')
+        self.square_width_entry.grid(row=4, column=1, sticky=EW, pady=5)
+
+        Label(frame, text="Square Height:", bg=self.DGRAY, fg='white').grid(row=5, column=0, sticky=W, pady=5)
+        self.square_height_entry = Entry(frame, textvariable=self.square_height, bg=self.RGRAY, fg='white', insertbackground='white')
+        self.square_height_entry.grid(row=5, column=1, sticky=EW, pady=5)
+        
+        ports = list(serial.tools.list_ports.comports())
+        port_choices = [f"{p.device} - {p.description}" for p in ports]
+        port_values = [p.device for p in ports]
+
+        Label(frame, text="Port X:", bg=self.DGRAY, fg='white').grid(row=6, column=0, sticky=W, pady=5)
+        self.port_x_var = StringVar(value=options.get('port_x', 'COM5'))
+        self.port_x_combo = ttk.Combobox(frame, textvariable=self.port_x_var, values=port_choices, state="readonly")
+        for i, p in enumerate(ports):
+            if p.device == options.get('port_x'):
+                self.port_x_combo.current(i)
+                break
+        self.port_x_combo.grid(row=6, column=1, sticky=EW, pady=5)
+
+        Label(frame, text="Port Y:", bg=self.DGRAY, fg='white').grid(row=7, column=0, sticky=W, pady=5)
+        self.port_y_var = StringVar(value=options.get('port_y', 'COM9'))
+        self.port_y_combo = ttk.Combobox(frame, textvariable=self.port_y_var, values=port_choices, state="readonly")
+        for i, p in enumerate(ports):
+            if p.device == options.get('port_y'):
+                self.port_y_combo.current(i)
+                break
+        self.port_y_combo.grid(row=7, column=1, sticky=EW, pady=5)
+
+        button_frame = Frame(frame, bg=self.DGRAY)
+        button_frame.grid(row=8, column=0, columnspan=2, pady=20)
+
+        CButton(button_frame, text="Import Settings", command=self.import_settings).pack(side=LEFT, padx=10)
+        CButton(button_frame, text="Apply", command=self.apply_settings).pack(side=LEFT, padx=10)
+
+        frame.columnconfigure(1, weight=1)
+
+    def import_settings(self):
+        global options
+        file_path = filedialog.askopenfilename(title="Select Settings File", filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")])
+        if file_path:
+            options = json.load(open(file_path))
+            print(f"Importing settings from {file_path}")
+        self.focus()
+
+    def apply_settings(self):
+        port_x = self.port_x_combo.get().split(" - ")[0]
+        port_y = self.port_y_combo.get().split(" - ")[0]
+        settings = {
+            "step_x": self.step_x.get(),
+            "step_y": self.step_y.get(),
+            "offset": self.offset.get(),
+            "width": self.square_width.get(),
+            "height": self.square_height.get(),
+            "await":0.01,
+            "xmin": self.xmin_var.get(),
+            "xmax": self.xmax_var.get(),
+            "port_x": port_x,
+            "port_y": port_y,
+        }
+        with open('options.json', 'w') as f:
+            json.dump(settings, f, indent=4)
 
     def zoom(self, event):
         old_scale = self.scale
@@ -622,9 +617,12 @@ class App(CustomTk):
             )
             self.image_tk = ImageTk.PhotoImage(resized_image)
             canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-            scale_ratio = self.scale / old_scale
-            canvas.xview_moveto((event.x+x)*self.scale)
-            canvas.yview_moveto((event.y+y)*self.scale)
+            bbox = canvas.bbox(self.spectrometr_image)
+            if bbox:
+                img_x = x * self.scale / old_scale
+                img_y = y * self.scale / old_scale
+                canvas.xview_moveto((img_x - event.x) / (resized_image.width - canvas.winfo_width()))
+                canvas.yview_moveto((img_y - event.y) / (resized_image.height - canvas.winfo_height()))
 
     def start_pan(self, event):
         self.spectrometr_canvas.scan_mark(event.x, event.y)
@@ -807,7 +805,6 @@ class App(CustomTk):
         self.spectrum_canvas.mpl_connect('scroll_event', self.spectrum_zoom)
         self.spectrum_canvas.mpl_connect('motion_notify_event', self.spectrum_pan)
         self.spectrum_canvas.mpl_connect('button_press_event', self.spectrum_pan_start)
-        self.spectrum_canvas.mpl_connect('motion_notify_event', self.spectrum_pan)
         self.spectrum_canvas.mpl_connect('button_release_event', self.spectrum_pan_stop)
         self._pan_start = None
 
@@ -852,8 +849,8 @@ class App(CustomTk):
     def spectrum_pan(self, event):
         if self._pan_start is not None and event.button == 1 and event.xdata is not None:
             dx = self._pan_start - event.xdata
-            x_min, x_max = self.ax.get_xlim()
-            self.ax.set_xlim(x_min + dx, x_max + dx)
+            minx, maxx = self.ax.get_xlim()
+            self.ax.set_xlim(minx + dx, maxx + dx)
             if hasattr(self, "_spectrum_vlines"):
                 for l in self._spectrum_vlines:
                     try:
@@ -862,6 +859,7 @@ class App(CustomTk):
                         pass
             self.spectrum_canvas.draw()
             self._pan_start = event.xdata
+            self.update_spectrum_plot()
         elif event.button != 1:
             self._pan_start = None
 
@@ -871,48 +869,44 @@ class App(CustomTk):
 
     async def update_video_feed(self):
         while True:
-            if self.detector and not self.calibrated:
-                direction, frame = self.detector.detect_movement_direction()
-                if direction:
-                    self.direction.set(f"Movement: {direction}")
-                    if self.connected:
-                        await asyncio.sleep(0.1)
-                        self.move('r')
-                        if direction == 'left' or direction == 'right':
-                            lh = self.ports[0]
-                            lv = self.ports[1]
-                        else:
-                            lv = self.ports[1]
-                            lh = self.ports[0]
-                        
-                        self.ports[0] = lh
-                        self.ports[1] = lv
-                        self.calibrated = True
+            try:
+                if not self.winfo_exists():
+                    break
+                if self.detector and not self.calibrated:
+                    direction, frame = self.detector.detect_movement_direction()
+                    if direction:
+                        self.direction.set(f"Movement: {direction}")
+                        if self.connected:
+                            await asyncio.sleep(0.1)
+                            self.move('r')
+                            if direction == 'left' or direction == 'right':
+                                lh = self.ports[0]
+                                lv = self.ports[1]
+                            else:
+                                lv = self.ports[1]
+                                lh = self.ports[0]
+                            self.ports[0] = lh
+                            self.ports[1] = lv
+                            self.calibrated = True
                 if self.calibrated:
                     self.detector = cv2.VideoCapture(self.cameraIndex)
-            else:
-                frame = self.detector.read()[1]
-                frame = cv2.flip(frame, 1)
-                if frame is not None:
-                    height, width, _ = frame.shape
-                    center_x, center_y = width // 2, height // 2
-                    cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150,150), 1)  # Horizontal line
-                    cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)  # Vertical line
-
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-            rgb_frame = cv2.resize(rgb_frame, (int(self.winfo_width()), int(self.winfo_height())))
-            self.image = Image.fromarray(rgb_frame)
-            image_tk = ImageTk.PhotoImage(image=self.image)
-            self.frame_label.configure(image=image_tk)
-            self.frame_label.image = image_tk
-            frame = np.zeros([1088,2048], dtype=np.uint8)
-            if self.hCamera is not None:
-                ret = PxLApi.getNextNumPyFrame(self.hCamera, frame)
-                self.original_image = Image.fromarray(frame)
-                resized_image = self.original_image.resize((int(self.original_image.width * self.scale), int(self.original_image.height * self.scale)))
-                self.image_tk = ImageTk.PhotoImage(resized_image)
-                self.spectrometr_canvas.itemconfig(self.spectrometr_image, image=self.image_tk)
-            self.update_spectrum_plot()
+                else:
+                    _, frame = self.detector.detect_movement_direction()
+                    #frame = cv2.flip(frame, 1)
+                    if frame is not None:
+                        height, width, _ = frame.shape
+                        center_x, center_y = width // 2, height // 2
+                        cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150,150), 1)
+                        cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150,150), 1)
+                        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+                        rgb_frame = cv2.resize(rgb_frame, (int(self.winfo_width()), int(self.winfo_height())))
+                        self.image = Image.fromarray(rgb_frame)
+                        image_tk = ImageTk.PhotoImage(image=self.image)
+                        self.frame_label.configure(image=image_tk)
+                        self.frame_label.image = image_tk
+                        self.update_spectrum_plot()
+            except TclError:
+                break 
             await asyncio.sleep(0.01)
             
     def update_canvas(self):
