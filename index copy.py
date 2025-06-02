@@ -803,8 +803,8 @@ class App(CustomTk):
         self.spectrum_canvas.draw()
         self.spectrum_canvas.get_tk_widget().pack(fill=BOTH, expand=True, pady=(10, 0), padx=10)
         self.spectrum_canvas.mpl_connect('scroll_event', self.spectrum_zoom)
-        self.spectrum_canvas.mpl_connect('motion_notify_event', self.spectrum_pan)
         self.spectrum_canvas.mpl_connect('button_press_event', self.spectrum_pan_start)
+        self.spectrum_canvas.mpl_connect('motion_notify_event', self.spectrum_pan)
         self.spectrum_canvas.mpl_connect('button_release_event', self.spectrum_pan_stop)
         self._pan_start = None
 
@@ -845,12 +845,14 @@ class App(CustomTk):
     def spectrum_pan_start(self, event):
         if event.button == 1 and event.xdata is not None:
             self._pan_start = event.xdata
+            self._pan_limits = self.ax.get_xlim()
+            self._pan_offset = 0 
 
     def spectrum_pan(self, event):
         if self._pan_start is not None and event.button == 1 and event.xdata is not None:
-            dx = self._pan_start - event.xdata
-            minx, maxx = self.ax.get_xlim()
-            self.ax.set_xlim(minx + dx, maxx + dx)
+            dx = event.xdata - self._pan_start
+            self._pan_offset += dx
+            self.ax.set_xlim(self._pan_limits[0] - self._pan_offset, self._pan_limits[1] - self._pan_offset)
             if hasattr(self, "_spectrum_vlines"):
                 for l in self._spectrum_vlines:
                     try:
@@ -858,13 +860,12 @@ class App(CustomTk):
                     except Exception:
                         pass
             self.spectrum_canvas.draw()
-            self._pan_start = event.xdata
-            self.update_spectrum_plot()
         elif event.button != 1:
             self._pan_start = None
 
     def spectrum_pan_stop(self, event):
         self._pan_start = None
+        self._pan_limits = None
         self.update_spectrum_plot()
 
     async def update_video_feed(self):
@@ -892,7 +893,6 @@ class App(CustomTk):
                     self.detector = cv2.VideoCapture(self.cameraIndex)
                 else:
                     _, frame = self.detector.detect_movement_direction()
-                    #frame = cv2.flip(frame, 1)
                     if frame is not None:
                         height, width, _ = frame.shape
                         center_x, center_y = width // 2, height // 2
@@ -904,7 +904,8 @@ class App(CustomTk):
                         image_tk = ImageTk.PhotoImage(image=self.image)
                         self.frame_label.configure(image=image_tk)
                         self.frame_label.image = image_tk
-                        self.update_spectrum_plot()
+                        if not getattr(self, "_pan_start", None):
+                            self.update_spectrum_plot()
             except TclError:
                 break 
             await asyncio.sleep(0.01)
