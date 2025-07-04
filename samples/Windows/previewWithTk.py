@@ -109,7 +109,7 @@ def main():
           # Step 3
           #      Start the preview / message pump, as well as the TkInter window resize handler
           
-          topHwnd =  int(topWindow.frame(),0)
+          topHwnd =  int(topWindow.frame.winfo_id(),0)
 
           start_preview()
           topWindow.bind('<Configure>', winResizeHandler)
