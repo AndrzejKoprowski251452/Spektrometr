@@ -223,11 +223,13 @@ class SpectrometerManager:
     
     def _spectrometer_loop(self):
         """Spectrometer data collection loop - using getNextNumPyFrame like samples"""
-        # Create numpy buffer for frame data like in getNextNumPyFrame.py
-        MAX_WIDTH = 5000
-        MAX_HEIGHT = 5000 
-        MAX_BYTES_PER_PIXEL = 3
+        # Create smaller numpy buffer for frame data - reduce memory usage
+        MAX_WIDTH = 2048   # Reduced from 5000
+        MAX_HEIGHT = 1536  # Reduced from 5000
+        MAX_BYTES_PER_PIXEL = 1  # Grayscale only
         frame = np.zeros([MAX_HEIGHT, MAX_WIDTH*MAX_BYTES_PER_PIXEL], dtype=np.uint8)
+        
+        print(f"Allocated frame buffer: {frame.shape} = {frame.nbytes / 1024 / 1024:.1f} MB")
         
         # Start streaming like in samples
         ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
@@ -245,9 +247,12 @@ class SpectrometerManager:
                     # Get frame descriptor with proper dimensions like in samples
                     frameDescriptor = ret[1]
                     
-                    # Put frame data in queue for processing
+                    # Put frame data in queue for processing - make smaller copy
+                    # Use frame.shape instead of frameDescriptor attributes
+                    frame_height, frame_width = frame.shape[:2]
+                    frame_copy = frame[:frame_height, :frame_width].copy()
                     self.data_queue.put({
-                        'frame': frame.copy(),  # Make a copy to avoid buffer issues
+                        'frame': frame_copy,  # Smaller copy of actual frame size
                         'descriptor': frameDescriptor,
                         'timestamp': time.time()
                     })
@@ -623,7 +628,7 @@ class SpektrometerApp(CustomTk):
         )
         
         # Variables
-        self.measurements = []
+        self.measurement_files = []  # Store filenames only, not data
         self.current_image = None
         self.spectrum_data = np.zeros(2048)
         self.cal_px_per_step_x = float(options.get('cal_px_per_step_x', 0.0))
@@ -1316,22 +1321,34 @@ class SpektrometerApp(CustomTk):
             # Try to load 2.bmp image
             if os.path.exists("2.bmp"):
                 image = Image.open("2.bmp")
+                
+                # Limit image size to prevent memory issues
+                max_size = (2048, 1536)  # Max size to prevent memory errors
+                if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
+                    print(f"Resizing large image from {image.size} to {max_size}")
+                    image = image.resize(max_size, Image.Resampling.LANCZOS)
+                
                 # Convert to grayscale if needed
                 if image.mode != 'L':
                     image = image.convert('L')
+                    
                 # Convert to numpy array
                 image_array = np.array(image)
-                spectrum = np.mean(image_array, axis=0)
-                self.spectrum_data = self._resample_to_2048(spectrum)
-                self._update_spectrum_plot()
-                print("Loaded test image: 2.bmp")
+                print(f"Loaded test image: 2.bmp, size: {image_array.shape}, memory: {image_array.nbytes / 1024:.1f} KB")
+                
+                # Calculate spectrum safely
+                if image_array.size > 0:
+                    spectrum = np.mean(image_array, axis=0)
+                    self.spectrum_data = self._resample_to_2048(spectrum)
+                    self._update_spectrum_plot()
+                    
                 return image_array
             else:
                 print("Test image 2.bmp not found, using default data")
-                return np.zeros((100, 100))
+                return np.zeros((100, 100), dtype=np.uint8)
         except Exception as e:
             print(f"Error loading test image: {e}")
-            return np.zeros((100, 100))
+            return np.zeros((100, 100), dtype=np.uint8)
 
     def _style_toolbar(self, toolbar):
         """Style toolbar to match dark theme"""
@@ -2499,13 +2516,22 @@ class SpektrometerApp(CustomTk):
             pass
     
     def load_measurements(self):
-        """Load measurement files and create result buttons"""
+        """Load measurement files list without caching data"""
         folder = "pomiar_dane"
-        self.measurements = []
+        self.measurement_files = []  # Store only filenames, not data
         if not os.path.exists(folder):
             os.makedirs(folder)
+        
+        # Just collect filenames - don't load data into memory
         for filename in sorted(glob.glob(os.path.join(folder, "*_spectra.csv"))):
-            data = []
+            self.measurement_files.append(filename)
+            
+        self.draw_measurements()
+    
+    def _load_measurement_data_on_demand(self, filename):
+        """Load measurement data only when needed"""
+        data = []
+        try:
             with open(filename, "r") as f:
                 reader = csv.reader(f)
                 for row in reader:
@@ -2518,12 +2544,13 @@ class SpektrometerApp(CustomTk):
                         data.append([x, y, spectrum])
                     except Exception as e:
                         print(f"Pominięto wiersz z błędem: {row} ({e})")
-            self.measurements.append(data)   
-        self.draw_measurements()
+        except Exception as e:
+            print(f"Błąd ładowania pliku {filename}: {e}")
+        return data
     
     def export_measurements(self):
         """Export all measurements to a single file"""
-        if not self.measurements:
+        if not self.measurement_files:
             messagebox.showinfo("Info", "Brak pomiarów do eksportu")
             return
         
@@ -2542,13 +2569,14 @@ class SpektrometerApp(CustomTk):
                     # Write header
                     writer.writerow(['measurement_id', 'x', 'y'] + [f'wavelength_{i}' for i in range(2048)])
                     
-                    # Write all measurements
-                    for measurement_id, measurement in enumerate(self.measurements):
-                        for point in measurement:
+                    # Write all measurements - load on demand
+                    for measurement_id, measurement_file in enumerate(self.measurement_files):
+                        measurement_data = self._load_measurement_data_on_demand(measurement_file)
+                        for point in measurement_data:
                             x, y, spectrum = point
                             writer.writerow([measurement_id + 1, x, y] + spectrum)
                     
-                    print(f"Eksportowano {len(self.measurements)} pomiarów do {filename}")
+                    print(f"Eksportowano {len(self.measurement_files)} pomiarów do {filename}")
                     messagebox.showinfo("Sukces", f"Pomiary zostały wyeksportowane do:\n{filename}")
                     
             except Exception as e:
@@ -2557,13 +2585,13 @@ class SpektrometerApp(CustomTk):
 
     def delete_all_measurements(self):
         """Delete all measurements"""
-        if not self.measurements:
+        if not self.measurement_files:
             messagebox.showinfo("Info", "Brak pomiarów do usunięcia")
             return
         
         result = messagebox.askyesno(
             "Usuń wszystkie pomiary",
-            f"Czy na pewno chcesz usunąć wszystkie {len(self.measurements)} pomiarów?\n"
+            f"Czy na pewno chcesz usunąć wszystkie {len(self.measurement_files)} pomiarów?\n"
             "Ta operacja jest nieodwracalna!"
         )
         
@@ -2578,7 +2606,7 @@ class SpektrometerApp(CustomTk):
                         os.remove(filename)
                         deleted_count += 1
                 
-                self.measurements.clear()
+                self.measurement_files.clear()  # Clear file list, not data cache
                 self.draw_measurements()
                 
                 print(f"Usunięto {deleted_count} plików pomiarów")
@@ -2590,7 +2618,7 @@ class SpektrometerApp(CustomTk):
 
     def delete_measurement(self, measurement_index):
         """Delete selected measurement"""
-        if 0 <= measurement_index < len(self.measurements):
+        if 0 <= measurement_index < len(self.measurement_files):
             result = messagebox.askyesno(
                 "Usuń pomiar",
                 f"Czy na pewno chcesz usunąć pomiar {measurement_index + 1}?\n"
@@ -2599,17 +2627,13 @@ class SpektrometerApp(CustomTk):
             
             if result:
                 try:
-                    # Find and delete corresponding file
-                    folder = "pomiar_dane"
-                    files = sorted(glob.glob(os.path.join(folder, "*_spectra.csv")))
+                    # Delete the specific file
+                    file_to_delete = self.measurement_files[measurement_index]
+                    os.remove(file_to_delete)
+                    print(f"Usunięto plik: {os.path.basename(file_to_delete)}")
                     
-                    if measurement_index < len(files):
-                        file_to_delete = files[measurement_index]
-                        os.remove(file_to_delete)
-                        print(f"Usunięto plik: {os.path.basename(file_to_delete)}")
-                    
-                    # Remove from list and refresh
-                    self.measurements.pop(measurement_index)
+                    # Remove from file list and refresh
+                    self.measurement_files.pop(measurement_index)
                     self.draw_measurements()
                     
                 except Exception as e:
@@ -2622,7 +2646,7 @@ class SpektrometerApp(CustomTk):
         for widget in self.results_frame.winfo_children():
             widget.destroy()
         
-        if not self.measurements:
+        if not self.measurement_files:
             # Show message if no measurements
             Label(
                 self.results_frame, 
@@ -2634,7 +2658,7 @@ class SpektrometerApp(CustomTk):
             # Create grid of measurement buttons
             buttons_per_row = 5  # Number of buttons per row
             
-            for i, measurement in enumerate(self.measurements):
+            for i, filename in enumerate(self.measurement_files):
                 row = i // buttons_per_row
                 col = i % buttons_per_row
                 
@@ -2652,10 +2676,11 @@ class SpektrometerApp(CustomTk):
                 )
                 btn.pack(fill=BOTH, expand=True, padx=2, pady=2)
                 
-                # Info label with measurement details
+                # Info label with filename
+                basename = os.path.basename(filename)
                 info_label = Label(
                     button_frame,
-                    text=f"{len(measurement)} punktów",
+                    text=basename.replace('_spectra.csv', ''),
                     bg=self.RGRAY, fg='lightgray',
                     font=("Arial", 8), justify=CENTER
                 )
@@ -2677,19 +2702,19 @@ class SpektrometerApp(CustomTk):
         
         # Update info label
         if hasattr(self, 'results_info'):
-            self.results_info.config(text=f"Pomiary: {len(self.measurements)}")
+            self.results_info.config(text=f"Pomiary: {len(self.measurement_files)}")
 
     def show_measurement_by_index(self, measurement_index):
-        """Show selected measurement by index"""
-        if 0 <= measurement_index < len(self.measurements):
-            measurement = self.measurements[measurement_index]
-            HeatMapWindow(self, measurement_index + 1, measurement, self.current_image)
+        """Show selected measurement by index - load data on demand"""
+        if 0 <= measurement_index < len(self.measurement_files):
+            filename = self.measurement_files[measurement_index]
+            # Load data only when needed
+            measurement_data = self._load_measurement_data_on_demand(filename)
+            HeatMapWindow(self, measurement_index + 1, measurement_data, self.current_image)
 
     def show_measurement(self, measurement):
-        """Show selected measurement in heatmap window (legacy method)"""
-        if measurement and measurement in self.measurements:
-            i = self.measurements.index(measurement)
-            HeatMapWindow(self, i+1, measurement, self.current_image)
+        """Show selected measurement in heatmap window (legacy method - deprecated)"""
+        print("Warning: show_measurement is deprecated, use show_measurement_by_index instead")
 
     def update_loop(self):
         """Ultra-lightweight GUI update loop - absolutely minimal operations"""
@@ -2861,10 +2886,22 @@ class SpektrometerApp(CustomTk):
                                     self.pixelink_image_data = image_data['frame']
                                     self.is_live_streaming = True
                                     
-                                    # Calculate spectrum
+                                    # Calculate spectrum - check ROI size to prevent memory issues
                                     x, y, w, h = self.get_roi_bounds()
+                                    
+                                    # Limit ROI size to prevent memory errors
+                                    max_roi_height = 500
+                                    max_roi_width = 2048
+                                    
+                                    # Clip ROI to image bounds and memory limits
+                                    img_h, img_w = self.pixelink_image_data.shape[:2]
+                                    x = max(0, min(x, img_w - 1))
+                                    y = max(0, min(y, img_h - 1))
+                                    w = min(w, max_roi_width, img_w - x)
+                                    h = min(h, max_roi_height, img_h - y)
+                                    
                                     roi = self.pixelink_image_data[y:y+h, x:x+w]
-                                    if roi.size > 0:
+                                    if roi.size > 0 and roi.size < 1000000:  # Max 1M pixels
                                         roi_mean = np.mean(roi, axis=0)
                                         self.spectrum_data = self._resample_to_2048(roi_mean)
                                         self._spectrum_needs_update = True
@@ -2884,9 +2921,22 @@ class SpektrometerApp(CustomTk):
                 elif hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
                     try:
                         with self._data_lock:
+                            # Same memory protection as above
                             x, y, w, h = self.get_roi_bounds()
+                            
+                            # Limit ROI size to prevent memory errors
+                            max_roi_height = 500
+                            max_roi_width = 2048
+                            
+                            # Clip ROI to image bounds and memory limits
+                            img_h, img_w = self.pixelink_image_data.shape[:2]
+                            x = max(0, min(x, img_w - 1))
+                            y = max(0, min(y, img_h - 1))
+                            w = min(w, max_roi_width, img_w - x)
+                            h = min(h, max_roi_height, img_h - y)
+                            
                             roi = self.pixelink_image_data[y:y+h, x:x+w]
-                            if roi.size > 0:
+                            if roi.size > 0 and roi.size < 1000000:  # Max 1M pixels
                                 roi_mean = np.mean(roi, axis=0)
                                 self.spectrum_data = self._resample_to_2048(roi_mean)
                                 self._spectrum_needs_update = True
