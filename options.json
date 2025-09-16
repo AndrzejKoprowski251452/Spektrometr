@@ -1,12 +1,20 @@
 {
     "step_x": 2,
     "step_y": 2,
-    "offset": 0,
     "width": 60,
     "height": 60,
-    "await": 0.01,
     "xmin": "1070",
     "xmax": "1125",
-    "port_x": "COM5",
-    "port_y": "COM9"
+    "port_x": "COM10",
+    "port_y": "COM11",
+    "port_aux1": "",
+    "port_aux2": "",
+    "camera_index": 2,
+    "cal_px_per_step_x": 1024.0,
+    "cal_px_per_step_y": 544.0,
+    "cal_sign_x": -1,
+    "cal_sign_y": -1,
+    "await": 0.01,
+    "cal_step_x": 1,
+    "cal_step_y": 1
 }
