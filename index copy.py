@@ -2204,7 +2204,7 @@ class SpektrometerApp(CustomTk):
             pass
         except Exception:
             pass
-        print("Reset kalibracji.")
+        print("Calibration reset.")
 
     def _add_cal_marker(self, key, x, y, color, label):
         # Remove existing marker for this key
