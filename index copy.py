@@ -7,7 +7,6 @@ import os
 import sys
 import time
 import threading
-import queue
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
@@ -19,7 +18,7 @@ import glob
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Rectangle
 from PIL import Image, ImageTk
@@ -27,8 +26,6 @@ import serial.tools.list_ports
 
 # Local imports
 from pixelinkWrapper import *
-from libsonyapi.camera import Camera
-from libsonyapi.actions import Actions
 from async_tkinter_loop import async_mainloop
 
 # Load configuration
@@ -39,10 +36,10 @@ except FileNotFoundError:
     options = {
         'step_x': 10, 'step_y': 10, 'offset': 5,
         'width': 100, 'height': 100, 'await': 0.01,
+        'sequence_sleep': 0.1,  # Sleep time during sequence measurements
         'xmin': '0', 'xmax': '2048',
         'port_x': 'COM5', 'port_y': 'COM9',
-        'port_aux1': '', 'port_aux2': '',
-        'camera_index': 0,
+        'camera_index': 0,  # Try camera 0 by default
         'cal_px_per_step_x': 0.0, 'cal_px_per_step_y': 0.0,
         'cal_sign_x': 1, 'cal_sign_y': 1,
         'cal_step_x': 1, 'cal_step_y': 1
@@ -53,21 +50,6 @@ LGRAY = '#232323'
 DGRAY = '#161616'
 RGRAY = '#2c2c2c'
 MGRAY = '#1D1c1c'
-
-
-class ThreadSafeQueue:
-    """Thread-safe queue for communication between threads"""
-    def __init__(self):
-        self.queue = queue.Queue()
-    
-    def put(self, item):
-        self.queue.put(item)
-    
-    def get(self, timeout=None):
-        try:
-            return self.queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
 
 
 class StreamToFunction:
@@ -90,17 +72,27 @@ class CameraManager:
         self.camera_index = camera_index
         self.detector = None
         self.running = False
-        self.frame_queue = ThreadSafeQueue()
-        self.direction_queue = ThreadSafeQueue()
         self.thread = None
+        self.frame = None
+        self.direction = "No movement"
         
     def start(self):
         """Start camera thread"""
         if not self.running:
             self.running = True
             self.detector = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+            
+            # Check if camera opened successfully
+            if not self.detector.isOpened():
+                print(f"Failed to open camera {self.camera_index}")
+                self.detector = None
+                self.running = False
+                return False
+                
             self.thread = threading.Thread(target=self._camera_loop, daemon=True)
             self.thread.start()
+            return True
+        return False
     
     def stop(self):
         """Stop camera thread"""
@@ -116,6 +108,11 @@ class CameraManager:
         
         while self.running:
             try:
+                # Check if detector is valid before reading
+                if not self.detector or not self.detector.isOpened():
+                    time.sleep(0.1)
+                    continue
+                    
                 ret, frame = self.detector.read()
                 if not ret:
                     continue
@@ -147,151 +144,175 @@ class CameraManager:
                 cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150), 1)
                 cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150), 1)
                 
-                # Put frame and direction in queues
-                self.frame_queue.put(frame)
-                self.direction_queue.put(direction)
+                # Store frame and direction directly
+                self.direction = direction
+                self.frame = frame
                 
                 time.sleep(0.033)  # ~30 FPS
                 
             except Exception as e:
                 print(f"Camera error: {e}")
                 time.sleep(0.1)
+    
+    def get_current_frame(self):
+        """Get the current frame from camera"""
+        return self.frame
+    
+    def get_current_direction(self):
+        """Get the current movement direction"""
+        return self.direction
 
 
 class SpectrometerManager:
-    """Manages spectrometer operations in separate thread"""
+    """Simplified Pixelink camera manager based on samples/getNextNumPyFrame.py"""
     
     def __init__(self):
         self.hCamera = None
         self.running = False
         self.thread = None
-        self.data_queue = ThreadSafeQueue()
+        
+        # Create buffer exactly like sample
+        MAX_WIDTH = 5000   # in pixels
+        MAX_HEIGHT = 5000  # in pixels
+        MAX_BYTES_PER_PIXEL = 3
+        self.frame_buffer = np.zeros([MAX_HEIGHT, MAX_WIDTH*MAX_BYTES_PER_PIXEL], dtype=np.uint8)
+        
+        print(f"✅ SpectrometerManager buffer created: {self.frame_buffer.shape}")
         
     def initialize(self):
-        """Initialize spectrometer camera - based on samples pattern"""
+        """Initialize camera exactly like sample"""
         try:
-            print("Attempting to initialize Pixelink camera...")
+            print("🔄 Initializing PixeLink camera (sample style)...")
             
-            # Simple initialization like in samples
+            # Initialize any camera - exactly like samples
             ret = PxLApi.initialize(0)
-            print(f"PxLApi.initialize(0) returned: {ret[0]}")
-            
-            if PxLApi.apiSuccess(ret[0]):
-                self.hCamera = ret[1]
-                print(f"Camera handle obtained: {self.hCamera}")
-                
-                # CRITICAL: Reset to factory settings first - required for proper operation
-                print("Resetting camera to factory settings...")
-                ret_factory = PxLApi.loadSettings(self.hCamera, PxLApi.Settings.SETTINGS_FACTORY)
-                if PxLApi.apiSuccess(ret_factory[0]):
-                    print("Factory settings loaded successfully")
-                else:
-                    print(f"Warning: Factory settings load failed: {ret_factory[0]}")
-                
-                print("Pixelink camera initialized successfully")
-                return True
-            else:
-                print(f"Failed to initialize camera: {ret[0]} - No Pixelink camera detected")
+            if not PxLApi.apiSuccess(ret[0]):
+                print(f"❌ Error: Unable to initialize a camera! rc = {ret[0]}")
+                print("🔄 Loading test image instead...")
+                self._load_test_image()
                 return False
+
+            self.hCamera = ret[1]
+            print(f"✅ Camera initialized successfully. Handle: {self.hCamera}")
+            return True
                 
         except Exception as e:
-            print(f"Spectrometer initialization error: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ Pixelink initialization error: {e}")
+            print("🔄 Loading test image instead...")
+            self._load_test_image()
             return False
     
+    def _load_test_image(self):
+        """Load test image when camera is not available"""
+        try:
+            import cv2
+            test_image_path = "2.bmp"
+            if os.path.exists(test_image_path):
+                # Load test image using OpenCV
+                test_img = cv2.imread(test_image_path, cv2.IMREAD_UNCHANGED)
+                if test_img is not None:
+                    # Convert to the same format as camera buffer
+                    if len(test_img.shape) == 3:
+                        # Convert BGR to grayscale or flatten
+                        test_img = cv2.cvtColor(test_img, cv2.COLOR_BGR2GRAY)
+                    
+                    # Resize/reshape to fit frame_buffer dimensions if needed
+                    h, w = test_img.shape
+                    if h * w <= self.frame_buffer.size:
+                        # Flatten and copy to frame buffer
+                        flat_img = test_img.flatten()
+                        self.frame_buffer.flat[:len(flat_img)] = flat_img
+                        print(f"✅ Test image loaded: {test_image_path} ({h}x{w})")
+                    else:
+                        print(f"⚠️ Test image too large: {h}x{w}")
+                else:
+                    print(f"❌ Could not load test image: {test_image_path}")
+            else:
+                print(f"❌ Test image not found: {test_image_path}")
+        except Exception as e:
+            print(f"❌ Error loading test image: {e}")
+    
     def start(self):
-        """Start spectrometer data collection"""
+        """Start streaming exactly like sample"""
         if self.hCamera and not self.running:
+            print("🔄 Starting PixeLink streaming...")
             self.running = True
-            self.thread = threading.Thread(target=self._spectrometer_loop, daemon=True)
+            self.thread = threading.Thread(target=self._capture_loop, daemon=True)
             self.thread.start()
+            print("✅ PixeLink thread started")
     
     def stop(self):
-        """Stop spectrometer - based on samples pattern"""
+        """Stop streaming exactly like sample"""
+        print("🔄 Stopping PixeLink streaming...")
         self.running = False
+        
         if self.thread:
-            self.thread.join(timeout=1.0)
+            self.thread.join(timeout=2.0)
+            
         if self.hCamera:
             try:
-                # Stop streaming and uninitialize like in samples
                 PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.STOP)
                 PxLApi.uninitialize(self.hCamera)
-                print("Pixelink camera stopped and uninitialized")
+                print("✅ PixeLink camera stopped and uninitialized")
             except Exception as e:
-                print(f"Error stopping camera: {e}")
-    
-    def _spectrometer_loop(self):
-        """Spectrometer data collection loop - using getNextNumPyFrame like samples"""
-        # Create smaller numpy buffer for frame data - reduce memory usage
-        MAX_WIDTH = 2048   # Reduced from 5000
-        MAX_HEIGHT = 1536  # Reduced from 5000
-        MAX_BYTES_PER_PIXEL = 1  # Grayscale only
-        frame = np.zeros([MAX_HEIGHT, MAX_WIDTH*MAX_BYTES_PER_PIXEL], dtype=np.uint8)
-        
-        print(f"Allocated frame buffer: {frame.shape} = {frame.nbytes / 1024 / 1024:.1f} MB")
-        
-        # Start streaming like in samples
-        ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
-        if not PxLApi.apiSuccess(ret[0]):
-            print(f"Failed to start streaming: {ret[0]}")
-            return
-        
-        print("Pixelink streaming started")
-        
-        while self.running:
-            try:
-                # Get frame using robust wrapper like in samples
-                ret = self._get_next_numpy_frame(self.hCamera, frame, 5)
-                if PxLApi.apiSuccess(ret[0]):                    
-                    # Get frame descriptor with proper dimensions like in samples
-                    frameDescriptor = ret[1]
-                    
-                    # Put frame data in queue for processing - make smaller copy
-                    # Use frame.shape instead of frameDescriptor attributes
-                    frame_height, frame_width = frame.shape[:2]
-                    frame_copy = frame[:frame_height, :frame_width].copy()
-                    self.data_queue.put({
-                        'frame': frame_copy,  # Smaller copy of actual frame size
-                        'descriptor': frameDescriptor,
-                        'timestamp': time.time()
-                    })
-                else:
-                    # Handle errors like in samples
-                    if ret[0] == PxLApi.ReturnCode.ApiStreamStopped or \
-                       ret[0] == PxLApi.ReturnCode.ApiNoCameraAvailableError:
-                        print("Camera stream stopped or camera unavailable")
-                        break
-                    elif ret[0] == PxLApi.ReturnCode.ApiCameraTimeoutError:
-                        pass  # Just retry on timeout
-                    else:
-                        print(f"getNextNumPyFrame failed: {ret[0]}")
-                    
-                time.sleep(0.033)  # ~30 FPS
-            except Exception as e:
-                print(f"Spectrometer frame capture error: {e}")
-                time.sleep(0.1)
-        
-        # Stop streaming when done
-        PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.STOP)
+                print(f"❌ Error stopping PixeLink: {e}")
+                
+        self.hCamera = None
 
-    def _get_next_numpy_frame(self, hCamera, frame, maxNumberOfTries):
-        """Robust wrapper around PxLApi.getNextNumPyFrame like in samples"""
+    def get_next_frame(self, maxTries=5):
+        """Robust wrapper around getNextFrame exactly like sample"""
         ret = (PxLApi.ReturnCode.ApiUnknownError,)
-
-        for i in range(maxNumberOfTries):
-            ret = PxLApi.getNextNumPyFrame(hCamera, frame)
+        
+        for _ in range(maxTries):
+            ret = PxLApi.getNextNumPyFrame(self.hCamera, self.frame_buffer)
             if PxLApi.apiSuccess(ret[0]):
                 return ret
             else:
                 # If the streaming is turned off, or worse yet -- is gone?
-                # If so, no sense in continuing.
                 if PxLApi.ReturnCode.ApiStreamStopped == ret[0] or \
-                    PxLApi.ReturnCode.ApiNoCameraAvailableError == ret[0]:
+                   PxLApi.ReturnCode.ApiNoCameraAvailableError == ret[0]:
                     return ret
-
-        # Ran out of tries, so return whatever the last error was.
+                else:
+                    print(f"    Hmmm... getNextFrame returned {ret[0]}")
+        
+        # Ran out of tries
         return ret
+
+    def _capture_loop(self):
+        """Main capture loop - exactly like sample getNextNumPyFrame.py"""
+        if not self.hCamera or not self.frame_buffer.size:
+            return
+            
+        # Start the stream exactly like sample
+        ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.START)
+        if not PxLApi.apiSuccess(ret[0]):
+            print(f"setStreamState with StreamState.START failed, rc = {ret[0]}")
+            return
+            
+        print("✅ PixeLink streaming started successfully (sample style)")
+
+        while self.running:
+            try:
+                # Use robust wrapper exactly like sample
+                ret = self.get_next_frame(1)
+                
+                if PxLApi.apiSuccess(ret[0]):
+                    self.frame_buffer = ret[1]
+
+                time.sleep(0.5)  # 500ms like sample
+                
+            except Exception as e:
+                print(f"❌ PixeLink capture error: {e}")
+                # Load test image on error
+                self._load_test_image()
+                time.sleep(0.1)
+        
+        # Stop streaming when loop ends
+        try:
+            ret = PxLApi.setStreamState(self.hCamera, PxLApi.StreamState.STOP)
+            print("✅ Streaming stopped")
+        except Exception as e:
+            print(f"❌ Stop streaming error: {e}")
 
 
 class MotorController:
@@ -524,7 +545,7 @@ class HeatMapWindow(CustomToplevel):
     
     def __init__(self, parent, measurement_index, data, image):
         CustomToplevel.__init__(self, parent)
-        self.set_title(f'Pomiar {measurement_index}')
+        self.set_title(f'Measurement {measurement_index}')
         self.geometry('1200x800')
         
         self.data = np.array(data, dtype=object)
@@ -548,23 +569,95 @@ class HeatMapWindow(CustomToplevel):
             self.cube[ix, iy, :] = row[2]
         
         self.current_lambda = 0
-        self.xmin = float(self.parent.xmin_var.get())
-        self.xmax = float(self.parent.xmax_var.get())
-        self.lambdas = np.linspace(self.xmin, self.xmax, spectrum_len)
+        
+        # Use calibration from options.json if available
+        if hasattr(self.parent, 'options') and 'lambda_calibration_enabled' in self.parent.options:
+            if self.parent.options['lambda_calibration_enabled']:
+                lambda_min = self.parent.options.get('lambda_min', 400.0)
+                lambda_max = self.parent.options.get('lambda_max', 700.0)
+                self.lambdas = np.linspace(lambda_min, lambda_max, spectrum_len)
+                self.calibrated = True
+            else:
+                # Use pixel-based calibration from xmin/xmax
+                self.xmin = float(self.parent.xmin_var.get())
+                self.xmax = float(self.parent.xmax_var.get())
+                self.lambdas = np.linspace(self.xmin, self.xmax, spectrum_len)
+                self.calibrated = False
+        else:
+            # Fallback to pixel-based calibration
+            self.xmin = float(self.parent.xmin_var.get())
+            self.xmax = float(self.parent.xmax_var.get())
+            self.lambdas = np.linspace(self.xmin, self.xmax, spectrum_len)
+            self.calibrated = False
     
     def _create_widgets(self):
         """Create GUI widgets"""
-        self.slider = Scale(
-            self.window, from_=0, to=self.cube.shape[2] - 1,
-            orient=HORIZONTAL, command=self.on_slider,
-            bg=self.DGRAY, fg='lightgray', length=600
-        )
-        self.slider.pack(fill=X, padx=10, pady=10)
+        # Main control frame at top
+        main_control_frame = Frame(self.window, bg=self.DGRAY)
+        main_control_frame.pack(fill=X, padx=10, pady=5)
         
-        self.fig = plt.figure(figsize=(12, 8), facecolor=self.DGRAY)
-        gs = GridSpec(2, 1, height_ratios=[3, 1])
-        self.ax3d = self.fig.add_subplot(gs[0], projection='3d')
-        self.ax2d = self.fig.add_subplot(gs[1])
+        # Top row controls - left side for wavelength, right side for colormap
+        top_row = Frame(main_control_frame, bg=self.DGRAY)
+        top_row.pack(fill=X, pady=(0, 5))
+        
+        # Left side - Wavelength controls
+        left_frame = Frame(top_row, bg=self.DGRAY)
+        left_frame.pack(side=LEFT, fill=X, expand=True)
+        
+        # Wavelength label and value
+        Label(left_frame, text="Wavelength:", bg=self.DGRAY, fg='white', font=('Arial', 10, 'bold')).pack(side=LEFT)
+        self.wavelength_label = Label(left_frame, text="", bg=self.DGRAY, fg='lightgreen', font=('Arial', 10))
+        self.wavelength_label.pack(side=LEFT, padx=(5,15))
+        
+        # Extended wavelength slider
+        self.slider = Scale(
+            left_frame, from_=0, to=self.cube.shape[2] - 1,
+            orient=HORIZONTAL, command=self.on_slider,
+            bg=self.DGRAY, fg='lightgray', length=500,  # Increased from 300 to 500
+            highlightthickness=0, troughcolor=self.RGRAY,
+            showvalue=False  # Hide the numeric labels above slider
+        )
+        self.slider.pack(side=LEFT, fill=X, expand=True, padx=(0,20))
+        
+        # Right side - Colormap selection
+        right_frame = Frame(top_row, bg=self.DGRAY)
+        right_frame.pack(side=RIGHT)
+        
+        Label(right_frame, text="Color Scale:", bg=self.DGRAY, fg='white', font=('Arial', 10, 'bold')).pack(side=LEFT, padx=(0,5))
+        self.colormap_var = StringVar(value='hot')
+        colormap_combo = ttk.Combobox(right_frame, textvariable=self.colormap_var, 
+                                     values=['hot', 'viridis', 'plasma', 'cool', 'winter', 'autumn', 'spring', 'summer', 'gray', 'jet'],
+                                     state='readonly', width=12)
+        colormap_combo.pack(side=LEFT, padx=5)
+        colormap_combo.bind('<<ComboboxSelected>>', lambda e: self._update_plots())
+        
+        # Bottom row controls - calibration info and camera controls
+        bottom_row = Frame(main_control_frame, bg=self.DGRAY)
+        bottom_row.pack(fill=X, pady=(5, 0))
+        
+        # Calibration status
+        cal_text = "Wavelength Calibrated" if self.calibrated else "Pixel Scale"
+        cal_color = 'lightgreen' if self.calibrated else 'orange'
+        Label(bottom_row, text="Scale:", bg=self.DGRAY, fg='white', font=('Arial', 9)).pack(side=LEFT)
+        Label(bottom_row, text=cal_text, bg=self.DGRAY, fg=cal_color, font=('Arial', 9, 'bold')).pack(side=LEFT, padx=(5,20))
+        
+        # Create figure with 2D layout: 3D left, 2D right, spectrum bottom
+        self.fig = plt.figure(figsize=(14, 10), facecolor=self.DGRAY)
+        gs = GridSpec(2, 2, height_ratios=[2, 1], width_ratios=[1, 1])
+        
+        # 3D plot (top left)
+        self.ax3d = self.fig.add_subplot(gs[0, 0], projection='3d')
+        
+        # 2D heatmap (top right)
+        self.ax2d = self.fig.add_subplot(gs[0, 1])
+        
+        # Spectrum plot (bottom row, spans both columns)
+        self.ax_spectrum = self.fig.add_subplot(gs[1, :])
+        
+        # Initialize flags
+        self.colorbar = None
+        self._layout_set = False
+        self._colorbar_created = False
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.window)
         self.canvas.draw()
@@ -573,39 +666,109 @@ class HeatMapWindow(CustomToplevel):
     def on_slider(self, val):
         """Handle slider change"""
         self.current_lambda = int(val)
+        # Update wavelength label
+        lambda_val = self.lambdas[self.current_lambda]
+        unit = "nm" if self.calibrated else "px"
+        self.wavelength_label.config(text=f"{lambda_val:.1f} {unit}")
         self._update_plots()
     
     def _update_plots(self):
-        """Update both 3D and 2D plots"""
-        # 3D heatmap
-        self.ax3d.clear()
-        data = self.cube[:, :, self.current_lambda]
-        X, Y = np.meshgrid(range(data.shape[0]), range(data.shape[1]))
-        self.ax3d.plot_surface(X, Y, data.T, cmap='hot')
-        
-        lambda_val = self.lambdas[self.current_lambda]
-        self.ax3d.set_title(f"3D Heatmap - λ={lambda_val:.0f}", color='white')
-        self.ax3d.set_xlabel("X", color='white')
-        self.ax3d.set_ylabel("Y", color='white')
-        self.ax3d.set_zlabel("Intensity", color='white')
-        
-        # 2D spectrum
-        self.ax2d.clear()
-        mean_profile = self.cube.mean(axis=(0, 1))
-        self.ax2d.plot(self.lambdas, mean_profile, color='orange', label="Average Spectrum")
-        self.ax2d.axvline(lambda_val, color='red', linestyle='--', label=f"λ={lambda_val:.0f}")
-        self.ax2d.set_title("Spectrum Profile", color='white')
-        self.ax2d.set_xlabel("Wavelength", color='white')
-        self.ax2d.set_ylabel("Intensity", color='white')
-        self.ax2d.legend()
-        
-        # Style plots
-        for ax in [self.ax3d, self.ax2d]:
-            ax.set_facecolor(self.DGRAY)
-            ax.tick_params(colors='white')
-        
-        self.fig.tight_layout()
-        self.canvas.draw()
+        """Update 3D, 2D heatmap and spectrum plots"""
+        try:
+            # Get current colormap
+            cmap = self.colormap_var.get()
+            
+            # Clear all plots
+            self.ax3d.clear()
+            self.ax2d.clear()
+            self.ax_spectrum.clear()
+            
+            lambda_val = self.lambdas[self.current_lambda]
+            unit = "nm" if self.calibrated else "px"
+            
+            # 3D heatmap (top left)
+            data = self.cube[:, :, self.current_lambda]
+            X, Y = np.meshgrid(range(data.shape[0]), range(data.shape[1]))
+            surf = self.ax3d.plot_surface(X, Y, data.T, cmap=cmap, alpha=0.8)
+            
+            self.ax3d.set_title(f"3D Heatmap - λ={lambda_val:.1f} {unit}", color='white', fontsize=12)
+            self.ax3d.set_xlabel("X Position", color='white')
+            self.ax3d.set_ylabel("Y Position", color='white')
+            self.ax3d.set_zlabel("Intensity", color='white')
+            
+            # 2D heatmap (top right)
+            im = self.ax2d.imshow(data.T, cmap=cmap, aspect='auto', origin='lower',
+                                extent=[0, data.shape[0], 0, data.shape[1]], 
+                                interpolation='nearest')
+            self.ax2d.set_title(f"2D Heatmap - λ={lambda_val:.1f} {unit}", color='white', fontsize=12)
+            self.ax2d.set_xlabel("X Position", color='white')
+            self.ax2d.set_ylabel("Y Position", color='white')
+            
+            # Set fixed layout
+            if not self._layout_set:
+                self.fig.subplots_adjust(left=0.08, right=0.92, top=0.92, bottom=0.08, 
+                                       wspace=0.3, hspace=0.3)
+                self._layout_set = True
+            
+            # Create/update colorbar for 2D heatmap
+            if not hasattr(self, '_colorbar_created') or not self._colorbar_created:
+                try:
+                    self.colorbar = self.fig.colorbar(im, ax=self.ax2d, fraction=0.046, 
+                                                    pad=0.04, shrink=0.8)
+                    self.colorbar.ax.tick_params(colors='white')
+                    self._colorbar_created = True
+                except Exception as e:
+                    print(f"Error creating colorbar: {e}")
+                    self._colorbar_created = False
+            else:
+                try:
+                    self.colorbar.update_normal(im)
+                except Exception:
+                    try:
+                        self.colorbar.remove()
+                        self.colorbar = self.fig.colorbar(im, ax=self.ax2d, fraction=0.046, 
+                                                        pad=0.04, shrink=0.8)
+                        self.colorbar.ax.tick_params(colors='white')
+                    except Exception as e:
+                        print(f"Error recreating colorbar: {e}")
+            
+            # Spectrum plot (bottom, full width)
+            mean_profile = self.cube.mean(axis=(0, 1))
+            self.ax_spectrum.plot(self.lambdas, mean_profile, color='orange', linewidth=2, 
+                                label="Average Spectrum", alpha=0.8)
+            self.ax_spectrum.axvline(lambda_val, color='red', linestyle='--', linewidth=2, 
+                                   label=f"Current λ={lambda_val:.1f} {unit}")
+            
+            # Add wavelength range info if calibrated
+            if self.calibrated:
+                self.ax_spectrum.set_title("Calibrated Spectrum Profile", color='white', fontsize=14)
+                self.ax_spectrum.set_xlabel("Wavelength (nm)", color='white')
+            else:
+                self.ax_spectrum.set_title("Spectrum Profile (Pixel Scale)", color='white', fontsize=14)
+                self.ax_spectrum.set_xlabel("Pixel Position", color='white')
+            
+            self.ax_spectrum.set_ylabel("Intensity", color='white')
+            self.ax_spectrum.legend(facecolor=self.DGRAY, edgecolor='white', 
+                                  labelcolor='white', fontsize=10)
+            self.ax_spectrum.grid(True, alpha=0.3, color='gray')
+            
+            # Style all plots
+            for ax in [self.ax3d, self.ax2d, self.ax_spectrum]:
+                ax.set_facecolor(self.DGRAY)
+                ax.tick_params(colors='white')
+            
+            self.canvas.draw()
+            
+        except Exception as e:
+            print(f"Error updating plots: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"Error updating plots: {e}")
+            # Try to continue with basic plot update
+            try:
+                self.canvas.draw()
+            except:
+                pass
 
 
 class SpektrometerApp(CustomTk):
@@ -615,6 +778,9 @@ class SpektrometerApp(CustomTk):
         super().__init__()
         self.title("Spektrometr")
         self.geometry('1400x900')
+        
+        # Store options reference for access from other components
+        self.options = options
         
         # Selected camera index from options
         self.camera_index = int(options.get('camera_index', 0))
@@ -633,31 +799,19 @@ class SpektrometerApp(CustomTk):
         self.spectrum_data = np.zeros(2048)
         self.cal_px_per_step_x = float(options.get('cal_px_per_step_x', 0.0))
         self.cal_px_per_step_y = float(options.get('cal_px_per_step_y', 0.0))
-        self.roi_active = False
-        self.roi_enabled = False
-        self.roi_coordinates = None  # New format: (x1, y1, x2, y2)
-        self.grid_lines = []
-        self.show_grid = False
-        self.scan_points = []
-        self.show_scan_points = False
-        self._scan_point_markers = []
-        self._pixelink_event_cids = []
-        self._calibration_mode = None  # 'x_before', 'x_after', 'y_before', 'y_after'
-        self._calibration_points = {}
-        self._cal_markers = {}
-        self._cal_images = {}  # Store before/after images for auto-calibration
-        self.aux_serial = {}
         self.cal_sign_x = int(options.get('cal_sign_x', 1))
         self.cal_sign_y = int(options.get('cal_sign_y', 1))
-        self._last_move_dir = None
-        # Calibration state: true only if px/step exist for both axes
-        self.calibration = bool(self.cal_px_per_step_x > 0 and self.cal_px_per_step_y > 0)
         
-        # Threading for performance - non-blocking operations
-        import threading
-        self._spectrum_needs_update = False
-        self._stop_threads = False
-        self._data_lock = threading.Lock()
+        # Sequence control flags
+        self._sequence_running = False
+        self._sequence_stop_requested = False
+        
+        # Calibration state: always start as False, must be performed in current session
+        self.calibration = False
+        
+        # Default spectrum range variables
+        self.xmin_var = StringVar(value=options.get('xmin', '0'))
+        self.xmax_var = StringVar(value=options.get('xmax', '2048'))
         
         # Background threads will be started in _delayed_init
         
@@ -677,7 +831,7 @@ class SpektrometerApp(CustomTk):
         self.notebook = ttk.Notebook(self.window)
         self.notebook.pack(fill=BOTH, expand=True, padx=5, pady=5)
         
-        # Create tabs - POŁĄCZONE ZAKŁADKI
+        # Create tabs - COMBINED TABS
         self.tab_camera_controls = Frame(self.notebook, bg=self.DGRAY)  # Camera + Controls
         self.tab_spectrum_pixelink = Frame(self.notebook, bg=self.DGRAY)  # Spectrum + Pixelink
         self.tab_results = Frame(self.notebook, bg=self.DGRAY)
@@ -701,7 +855,7 @@ class SpektrometerApp(CustomTk):
         main_container.pack(fill=BOTH, expand=True, padx=5, pady=5)
         
         # Camera title
-        Label(main_container, text="Live Camera", font=("Arial", 16, "bold"), 
+        Label(main_container, text="Camera", font=("Arial", 16, "bold"), 
               bg=self.DGRAY, fg='white').pack(pady=(0, 10))
         
         # Centered camera display (Canvas with drag select) - moderate size
@@ -710,24 +864,15 @@ class SpektrometerApp(CustomTk):
         
         self.camera_canvas = Canvas(camera_container, bg=self.DGRAY, highlightthickness=0)
         self.camera_canvas.pack()
-        self._camera_canvas_img = None
+        self._camera_canvas_img = None  # Initialize as None instead of reading from camera
         self._camera_frame_size = (800, 600)  # Moderate camera view to leave space for controls
         self.camera_canvas.config(width=self._camera_frame_size[0], height=self._camera_frame_size[1])
         
         # Draw placeholder if no camera
-        self._draw_camera_placeholder()
-        
-        # Drag selection state
-        self.cam_drag_start = None
-        self.cam_drag_rect = None
-        self.cam_scan_area_norm = None  # (x0,y0,x1,y1) normalized 0..1
-        self.camera_canvas.bind('<ButtonPress-1>', self._cam_on_press)
-        self.camera_canvas.bind('<B1-Motion>', self._cam_on_drag)
-        self.camera_canvas.bind('<ButtonRelease-1>', self._cam_on_release)
         
         # Status under canvas
         self.cam_status = Label(main_container, bg=self.DGRAY, fg='lightgray', 
-                               text="Camera Status: Not started")
+                               text="Camera Status: Not Started", font=("Arial", 10))
         self.cam_status.pack(pady=5)
         
         # Control buttons frame - centered
@@ -735,14 +880,20 @@ class SpektrometerApp(CustomTk):
         control_frame.pack(pady=10)
         
         # Essential controls only
-        CButton(control_frame, text="Start Camera", command=self.start_camera).pack(side=LEFT, padx=5)
-        CButton(control_frame, text="Stop Camera", command=self.stop_camera).pack(side=LEFT, padx=5)
+        CButton(control_frame, text="Start Camera", command=lambda: self.start_camera()).pack(side=LEFT, padx=5)
+        CButton(control_frame, text="Stop Camera", command=lambda: self.stop_camera()).pack(side=LEFT, padx=5)
         CButton(control_frame, text="Calibrate", command=self.start_calibration_both).pack(side=LEFT, padx=10)
         
         # Add Start Sequence button (needed for state management)
         self.start_seq_btn = CButton(control_frame, text="Start Sequence", command=self.start_measurement_sequence)
-        self.start_seq_btn.pack(side=LEFT, padx=10)
-        # Initial state based on calibration and ROI
+        self.start_seq_btn.pack(side=LEFT, padx=5)
+        
+        # Add Stop Sequence button
+        self.stop_seq_btn = CButton(control_frame, text="Stop Sequence", command=self.stop_measurement_sequence)
+        self.stop_seq_btn.pack(side=LEFT, padx=5)
+        self.stop_seq_btn.config(state=DISABLED)  # Initially disabled
+        
+        # Initial state based on calibration
         self._update_start_seq_state()
         
         # Motor control section
@@ -814,234 +965,191 @@ class SpektrometerApp(CustomTk):
         self.motor_status = Label(motor_controls_frame, bg=self.DGRAY, fg='lightgray', 
                                  text="Motor Status: Ready", font=("Arial", 9), wraplength=150)
         self.motor_status.pack(pady=(10, 0))
+        
+    def start_camera(self):
+        """Start camera preview and enable live camera in heatmaps"""
+        if self.camera_manager and not self.camera_manager.running:
+            success = self.camera_manager.start()
+            if success:
+                # Initialize placeholder instead of frame_buffer (which doesn't exist)
+                self._camera_canvas_img = None
+                self.cam_status.config(text="Camera started - Live view active", fg='lightgreen')
+                
+            else:
+                self.cam_status.config(text="Failed to start camera", fg='red')
+        else:
+            print("Camera already running or not initialized")
+
+    def stop_camera(self):
+        """Stop camera preview"""
+        if self.camera_manager and self.camera_manager.running:
+            self.camera_manager.stop()
+            self.cam_status.config(text="Camera stopped", fg='orange')
+            print("Camera stopped")
+        else:
+            print("Camera is not running")
 
     def _setup_spectrum_pixelink_tab(self):
-        """Setup combined spectrum and pixelink tab"""
+        """Setup spectrum tab with image preview and spectrum plot"""
         # Create main container
         main_container = Frame(self.tab_spectrum_pixelink, bg=self.DGRAY)
         main_container.pack(fill=BOTH, expand=True, padx=5, pady=5)
         
-        # Top section - Spectrum (30% of space)
-        spectrum_frame = Frame(main_container, bg=self.DGRAY)
-        spectrum_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
-        spectrum_frame.pack_propagate(False)
-        spectrum_frame.configure(height=250)  # Fixed smaller height
+        # Top section - Image Preview (60% of space)
+        image_frame = Frame(main_container, bg=self.DGRAY)
+        image_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
         
-        # Spectrum title and controls
-        spectrum_header = Frame(spectrum_frame, bg=self.DGRAY)
-        spectrum_header.pack(fill=X, pady=(0, 5))
+        # Image title and status
+        image_header = Frame(image_frame, bg=self.DGRAY)
+        image_header.pack(fill=X, pady=(0, 5))
         
-        Label(spectrum_header, text="Live Spectrum", font=("Arial", 14, "bold"), 
+        Label(image_header, text="PixeLink Camera", font=("Arial", 14, "bold"), 
               bg=self.DGRAY, fg='white').pack(side=LEFT)
         
-        # Range controls
-        range_frame = Frame(spectrum_header, bg=self.DGRAY)
-        range_frame.pack(side=RIGHT)
-        
-        Label(range_frame, text="X min:", bg=self.DGRAY, fg='white').pack(side=LEFT)
-        self.xmin_var = StringVar(value=options.get('xmin', '0'))
-        Entry(range_frame, textvariable=self.xmin_var, width=8, bg=self.RGRAY, fg='white').pack(side=LEFT, padx=5)
-        
-        Label(range_frame, text="X max:", bg=self.DGRAY, fg='white').pack(side=LEFT)
-        self.xmax_var = StringVar(value=options.get('xmax', '2048'))
-        Entry(range_frame, textvariable=self.xmax_var, width=8, bg=self.RGRAY, fg='white').pack(side=LEFT, padx=5)
-        
-        CButton(range_frame, text="Set Range", command=self.set_spectrum_range).pack(side=LEFT, padx=5)
-        CButton(range_frame, text="Reset View", command=self.reset_spectrum_view).pack(side=LEFT, padx=5)
-        CButton(range_frame, text="Auto Scale", command=self.auto_scale_spectrum).pack(side=LEFT, padx=5)
-        
-        # Spectrum plot
-        self._create_spectrum_plot(spectrum_frame)
-        
-        # Bottom section - Pixelink (70% of space - remaining space)
-        pixelink_frame = Frame(main_container, bg=self.DGRAY)
-        pixelink_frame.pack(fill=BOTH, expand=True, pady=(5, 0))
-        
-        # Pixelink title and controls
-        pixelink_header = Frame(pixelink_frame, bg=self.DGRAY)
-        pixelink_header.pack(fill=X, pady=(0, 5))
-        
-        Label(pixelink_header, text="Spectrometer Camera View", font=("Arial", 14, "bold"), 
-              bg=self.DGRAY, fg='white').pack(side=LEFT)
-        
-        # Pixelink control buttons
-        pixelink_controls = Frame(pixelink_header, bg=self.DGRAY)
-        pixelink_controls.pack(side=RIGHT)
-        
-        CButton(pixelink_controls, text="Initialize", command=self.init_pixelink).pack(side=LEFT, padx=2)
-        CButton(pixelink_controls, text="Start", command=self.start_pixelink).pack(side=LEFT, padx=2)
-        CButton(pixelink_controls, text="Stop", command=self.stop_pixelink).pack(side=LEFT, padx=2)
-        CButton(pixelink_controls, text="Reset View", command=self.reset_pixelink_view).pack(side=LEFT, padx=2)
-        CButton(pixelink_controls, text="Load Test Image", command=self.load_test_image).pack(side=LEFT, padx=2)
-        
-        # Status label
         self.pixelink_status = Label(
-            pixelink_controls,
-            text="Status: Not initialized",
-            bg=self.DGRAY, fg='lightgray'
+            image_header,
+            text="🔄 Initializing...",
+            bg=self.DGRAY, fg='yellow', font=("Arial", 10)
         )
-        self.pixelink_status.pack(side=LEFT, padx=10)
+        self.pixelink_status.pack(side=RIGHT)
         
-        # Pixelink plot
-        self._create_pixelink_plot(pixelink_frame)
-
-    def _create_spectrum_plot(self, parent_frame):
-        """Create spectrum matplotlib plot with navigation toolbar"""
-        self.spectrum_fig, self.spectrum_ax = plt.subplots(figsize=(14, 6), facecolor=self.DGRAY)
+        # Simple image display
+        self.spectrum_live_label = Label(
+            image_frame,
+            bg='black',
+            text="Camera Preview\nInitializing...",
+            fg='white',
+            font=("Arial", 12),
+            justify=CENTER
+        )
+        self.spectrum_live_label.pack(fill=BOTH, expand=True, padx=5, pady=5)
+        
+        # Bottom section - Spectrum Plot (40% of space) 
+        spectrum_frame = Frame(main_container, bg=self.DGRAY)
+        spectrum_frame.pack(fill=X, pady=(5, 0))
+        spectrum_frame.pack_propagate(False)
+        spectrum_frame.configure(height=200)
+        
+        # Create spectrum plot directly
+        self.spectrum_fig, self.spectrum_ax = plt.subplots(figsize=(10, 3), facecolor=self.DGRAY)
         self.spectrum_ax.set_facecolor(self.DGRAY)
         
         self.x_axis = np.linspace(0, 2048, 2048)
-        self.spectrum_line, = self.spectrum_ax.plot(self.x_axis, self.spectrum_data, color='green', linewidth=1.5)
+        self.spectrum_data = np.zeros(2048)
+        self.spectrum_line, = self.spectrum_ax.plot(self.x_axis, self.spectrum_data, color='green', linewidth=1)
         
-        # Style the plot - same as pixelink
-        self.spectrum_ax.set_xlabel("Pixel/Wavelength", color='white', fontsize=12)
-        self.spectrum_ax.set_ylabel("Intensity", color='white', fontsize=12)
-        self.spectrum_ax.set_title("Live Spectrum", color='white', fontsize=14)
-        self.spectrum_ax.tick_params(colors='white')
+        # Style
+        self.spectrum_ax.set_xlabel("Pixel", color='white', fontsize=10)
+        self.spectrum_ax.set_ylabel("Intensity", color='white', fontsize=10)
+        self.spectrum_ax.set_title("Spectrum", color='white', fontsize=12)
+        self.spectrum_ax.tick_params(colors='white', labelsize=8)
         self.spectrum_ax.grid(True, alpha=0.3, color='gray')
         
-        # Set better margins - same as pixelink
-        self.spectrum_fig.tight_layout(pad=2.0)
+        self.spectrum_fig.tight_layout()
         
-        # Create canvas
-        canvas_frame = Frame(parent_frame, bg=self.DGRAY)
-        canvas_frame.pack(fill=BOTH, expand=True, pady=5)
-        self.spectrum_canvas = FigureCanvasTkAgg(self.spectrum_fig, master=canvas_frame)
+        # Canvas
+        self.spectrum_canvas = FigureCanvasTkAgg(self.spectrum_fig, master=spectrum_frame)
         self.spectrum_canvas.draw()
-        
-        # Navigation toolbar for zoom/pan
-        toolbar_frame = Frame(parent_frame, bg=self.DGRAY)
-        toolbar_frame.pack(fill=X, pady=2)
-        
-        from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-        self.spectrum_toolbar = NavigationToolbar2Tk(self.spectrum_canvas, toolbar_frame)
-        self.spectrum_toolbar.config(bg=self.DGRAY)
-        
-        # Style toolbar
-        self._style_toolbar(self.spectrum_toolbar)
-        self.spectrum_toolbar.update()
-        
-        # Pack canvas - centered
         self.spectrum_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         
-        # Add mouse interaction
-        self.spectrum_canvas.mpl_connect('motion_notify_event', self.on_spectrum_mouse_move)
-        self.spectrum_canvas.mpl_connect('button_press_event', self.on_spectrum_click)
-        
-        # Initialize crosshair
-        self.spectrum_crosshair_v = None
-        self.spectrum_crosshair_h = None
-        self.spectrum_annotation = None
-
-    def _create_pixelink_plot(self, parent_frame):
-        """Create simplified spectrum area without image display"""
-        # Header with title
-        pixelink_header = Frame(parent_frame, bg=self.DGRAY)
-        pixelink_header.pack(fill=X, pady=(0, 5))
-        Label(pixelink_header, text="Pixelink Spectrum Calculator", font=("Arial", 14, "bold"), 
-              bg=self.DGRAY, fg='white').pack()
-        
-        # Status display instead of image
-        status_frame = Frame(parent_frame, bg=self.DGRAY, relief='sunken', bd=2)
-        status_frame.pack(fill=BOTH, expand=True, pady=5)
-        
-        self.pixelink_status = Label(status_frame, bg=self.DGRAY, fg='lightgreen', 
-                                   text="Spectrum calculation active\nNo image display", 
-                                   font=("Arial", 12), justify=CENTER)
-        self.pixelink_status.pack(expand=True, fill=BOTH, padx=20, pady=20)
-        
-        # Load test image data for spectrum calculation only
-        self.pixelink_image_data = self._load_test_image_data()
-        self.is_live_streaming = False
-        
-        # Initialize spectrum with test image data
-        if self.pixelink_image_data is not None:
-            x, y, w, h = self.get_roi_bounds()
-            roi = self.pixelink_image_data[y:y+h, x:x+w]
-            if roi.size > 0:
-                roi_mean = np.mean(roi, axis=0)
-                self.spectrum_data = self._resample_to_2048(roi_mean)
-                # Force initial spectrum display
-                self.after_idle(self._update_spectrum_plot)
-
-        # Simplified controls - just ROI
-        controls = Frame(parent_frame, bg=self.DGRAY)
-        controls.pack(fill=X, pady=4)
-        self.roi_btn = CButton(controls, text="Select ROI", command=self.toggle_roi_mode)
-        self.roi_btn.pack(side=LEFT, padx=2)
-        # Initialize ROI button state
-        self._update_roi_button_state()
-        
-        Label(controls, text="ROI: Click to select spectrum area", 
-              bg=self.DGRAY, fg='lightgray', font=("Arial", 9)).pack(side=LEFT, padx=10)
-
-        # Remove image event binding
-        pass
-    
-    def _update_pixelink_image_display(self):
-        """Disabled - no image display needed"""
-        pass
-    
-    def _finish_image_update(self):
-        """Disabled - no image updates"""
-        pass
-
-    def _bind_roi_events(self):
-        """Disabled - no image interaction needed"""
-        pass
-
-    def toggle_roi_mode(self):
-        """Toggle ROI selection mode"""
-        if not getattr(self, 'calibration', False):
-            print("❌ Najpierw przeprowadź kalibrację w zakładce 'Camera & Controls'")
-            return
+        # Start unified update thread for both camera and spectrometer
+        def update_image():
+            def update_camera_display(frame):
+                """Update camera display - inline function"""
+                try:
+                    if frame is None or frame.size == 0:
+                        return
+                        
+                    # Resize for camera canvas display
+                    height, width = frame.shape[:2]
+                    canvas_w, canvas_h = self._camera_frame_size
+                    
+                    # Scale to fit canvas
+                    scale = min(canvas_w/width, canvas_h/height)
+                    new_w, new_h = int(width*scale), int(height*scale)
+                    
+                    if new_w > 0 and new_h > 0:
+                        frame_resized = cv2.resize(frame, (new_w, new_h))
+                        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                        
+                        # Create PIL image and PhotoImage
+                        pil_image = Image.fromarray(frame_rgb)
+                        photo = ImageTk.PhotoImage(pil_image)
+                        
+                        # Update camera canvas
+                        if hasattr(self, 'camera_canvas'):
+                            self.camera_canvas.delete("all")
+                            x_offset = (canvas_w - new_w) // 2
+                            y_offset = (canvas_h - new_h) // 2
+                            self.camera_canvas.create_image(x_offset, y_offset, anchor='nw', image=photo)
+                            self.camera_canvas.image = photo  # Keep reference
+                            
+                        # Update status
+                        if hasattr(self, 'cam_status'):
+                            self.cam_status.config(text="Camera: Live feed active", fg='lightgreen')
+                    
+                except Exception as e:
+                    print(f"Camera display error: {e}")
             
-        if not getattr(self, 'roi_enabled', False):
-            print("❌ ROI selection jest wyłączony. Przeprowadź kalibrację aby go włączyć.")
-            return
+            def update_spectrum_display(frame):
+                """Update spectrometer image display - inline function"""
+                try:
+                    if frame is None or frame.size == 0:
+                        return
+                        
+                    # Create PIL image from buffer
+                    pil_image = Image.fromarray(frame.copy())
+                    
+                    # Convert to PhotoImage
+                    photo = ImageTk.PhotoImage(pil_image)
+                    self.spectrum_live_label.configure(image=photo, text="")
+                    self.spectrum_live_label.image = photo
+                    
+                    # Update status
+                    self.pixelink_status.configure(text="🟢 Live", fg='lightgreen')
+                    
+                except Exception as e:
+                    print(f"Spectrum display error: {e}")
             
-        self.roi_active = not self.roi_active
+            while not getattr(self, '_stop_threads', False):
+                try:
+                    # Update camera display using direct method
+                    if (hasattr(self, 'camera_manager') and 
+                        self.camera_manager and 
+                        self.camera_manager.running):
+                        
+                        camera_frame = self.camera_manager.get_current_frame()
+                        if camera_frame is not None:
+                            # Update camera display in main thread
+                            self.after_idle(lambda f=camera_frame: update_camera_display(f))
+                    
+                    # Update spectrometer display using direct buffer access
+                    if (hasattr(self, 'spectrometer_manager') and 
+                        self.spectrometer_manager and 
+                        self.spectrometer_manager.running and
+                        hasattr(self.spectrometer_manager, 'frame_buffer')):
+                        
+                        frame_buffer = self.spectrometer_manager.frame_buffer
+                        if frame_buffer is not None and frame_buffer.size > 0:
+                            # Update spectrum display in main thread
+                            self.after_idle(lambda f=frame_buffer: update_spectrum_display(f))
+                    
+                    time.sleep(0.03)  # 30 FPS max for both sources
+                except Exception as e:
+                    print(f"Update thread error: {e}")
+                    time.sleep(0.1)
         
-        if self.roi_active:
-            print("✓ ROI MODE: WŁĄCZONY - Przeciągnij myszą po obrazie kamery aby zaznaczyć obszar skanowania")
-            self.roi_btn.configure(text="✓ ROI Active", bg='#28a745', fg='white')
-        else:
-            print("ROI MODE: WYŁĄCZONY")
-            self.roi_btn.configure(text="Select ROI", bg='#6c757d', fg='white')
-
-    def toggle_grid(self):
-        """Toggle grid display - disabled for Tkinter image"""
-        self.show_grid = not self.show_grid
-        print(f"Grid: {'ON' if self.show_grid else 'OFF'} (visual grid disabled for performance)")
-        # Grid drawing disabled for Tkinter Label - saves resources
-
-    def _on_pixelink_press(self, event):
-        """Disabled - no image interaction"""
-        pass
-
-    def _on_pixelink_drag(self, event):
-        """Disabled - no image interaction"""
-        pass
-
-    def _on_pixelink_release(self, event):
-        """Disabled - no image interaction"""
-        pass
-        print(f"ROI set: {self.get_roi_bounds()}")
-        
-        # Regenerate scan points when ROI changes
-        if self.calibration:
-            self.scan_points = self.generate_scan_points()
-            print(f"Wygenerowano {len(self.scan_points)} punktów skanowania dla nowego ROI")
-        
-        self._update_start_seq_state()
+        # Start unified thread
+        threading.Thread(target=update_image, daemon=True).start()
 
     def _update_start_seq_state(self):
         try:
-            # Check conditions
+            # Check conditions - calibration must be completed and not in progress
             cal_status = getattr(self, 'calibration', False)
-            roi_status = hasattr(self, 'roi_coordinates') and self.roi_coordinates is not None
+            cal_in_progress = getattr(self, '_calibration_mode', None) is not None
             
-            enabled = bool(cal_status and roi_status)
+            # Enable only if calibrated AND not currently calibrating
+            enabled = bool(cal_status and not cal_in_progress)
             
             if hasattr(self, 'start_seq_btn'):
                 old_state = str(self.start_seq_btn.cget('state'))
@@ -1050,51 +1158,31 @@ class SpektrometerApp(CustomTk):
                 # Update button appearance and text based on state
                 if enabled:
                     self.start_seq_btn.configure(
-                        text="▶ START SEQUENCE", 
+                        text="START SEQUENCE", 
                         bg='#28a745',  # Green background when enabled
                         fg='white'
                     )
                     # Print message when sequence button becomes enabled
                     if old_state == 'disabled':
-                        print("✅ PRZYCISK SEKWENCJI ODBLOKOWANY - Można rozpocząć pomiary!")
-                        print("Kliknij '▶ START SEQUENCE' aby rozpocząć automatyczne skanowanie")
+                        print("SEQUENCE BUTTON UNLOCKED - Ready to start measurements!")
+                        print("Click 'START SEQUENCE' to begin automatic scanning")
                 else:
+                    # Determine why it's disabled
+                    if cal_in_progress:
+                        button_text = "Start Sequence (calibrating...)"
+                    elif not cal_status:
+                        button_text = "Start Sequence (no calibration)"
+                    else:
+                        button_text = "Start Sequence (disabled)"
+                        
                     self.start_seq_btn.configure(
-                        text="⏸ Start Sequence", 
+                        text=button_text, 
                         bg='#6c757d',  # Gray background when disabled
                         fg='lightgray'
                     )
         except Exception as e:
-            print(f"Błąd aktualizacji stanu przycisku: {e}")
+            print(f"Error updating button state: {e}")
 
-    def _update_roi_button_state(self):
-        """Update ROI button state based on calibration"""
-        try:
-            if hasattr(self, 'roi_btn'):
-                calibrated = getattr(self, 'calibration', False)
-                roi_enabled = getattr(self, 'roi_enabled', False)
-                
-                if calibrated and roi_enabled:
-                    self.roi_btn.configure(state=NORMAL, bg='#007bff', fg='white')
-                    print("✓ Przycisk ROI odblokowany - można zaznaczać obszar skanowania")
-                else:
-                    self.roi_btn.configure(state=DISABLED, bg='#6c757d', fg='lightgray')
-        except Exception as e:
-            print(f"Błąd aktualizacji przycisku ROI: {e}")
-
-    def _draw_grid(self):
-        """Grid drawing disabled for Tkinter Label - no visual feedback needed"""
-        pass
-
-    def get_roi_bounds(self):
-        """Get ROI bounds - uses roi_coordinates if available"""
-        if hasattr(self, 'roi_coordinates') and self.roi_coordinates:
-            x1, y1, x2, y2 = self.roi_coordinates
-            return (x1, y1, x2-x1, y2-y1)
-        elif hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
-            return (0, 0, self.pixelink_image_data.shape[1], self.pixelink_image_data.shape[0])
-        else:
-            return (0, 0, 100, 100)  # Default fallback
 
     def _setup_results_tab(self):
         """Setup results tab"""
@@ -1102,14 +1190,14 @@ class SpektrometerApp(CustomTk):
         control_frame = Frame(self.tab_results, bg=self.DGRAY)
         control_frame.pack(fill=X, padx=5, pady=5)
         
-        CButton(control_frame, text="Odśwież", command=self.load_measurements).pack(side=LEFT, padx=5)
-        CButton(control_frame, text="Eksportuj wszystkie", command=self.export_measurements).pack(side=LEFT, padx=5)
-        CButton(control_frame, text="Usuń wszystkie", command=self.delete_all_measurements).pack(side=LEFT, padx=5)
+        CButton(control_frame, text="Refresh", command=self.load_measurements).pack(side=LEFT, padx=5)
+        CButton(control_frame, text="Export All", command=self.export_measurements).pack(side=LEFT, padx=5)
+        CButton(control_frame, text="Delete All", command=self.delete_all_measurements).pack(side=LEFT, padx=5)
         
         # Info label
         self.results_info = Label(
             control_frame, 
-            text="Pomiary: 0", 
+            text="Measurements: 0", 
             bg=self.DGRAY, fg='lightgray'
         )
         self.results_info.pack(side=RIGHT, padx=10)
@@ -1193,33 +1281,29 @@ class SpektrometerApp(CustomTk):
         self.port_y_combo = ttk.Combobox(settings_frame, textvariable=self.port_y_var, values=ports)
         self.port_y_combo.grid(row=row_base+2, column=1, sticky=EW, pady=5)
 
-        Label(settings_frame, text="Port AUX1:", bg=self.DGRAY, fg='white').grid(row=row_base+3, column=0, sticky=W, pady=5)
-        self.port_aux1_var = StringVar(value=options.get('port_aux1', ''))
-        self.port_aux1_combo = ttk.Combobox(settings_frame, textvariable=self.port_aux1_var, values=ports)
-        self.port_aux1_combo.grid(row=row_base+3, column=1, sticky=EW, pady=5)
+        # Sequence sleep setting
+        Label(settings_frame, text="Sequence Sleep (s):", bg=self.DGRAY, fg='white').grid(row=row_base+3, column=0, sticky=W, pady=5)
+        self.sequence_sleep_var = DoubleVar(value=options.get('sequence_sleep', 0.1))
+        sequence_sleep_entry = Entry(settings_frame, textvariable=self.sequence_sleep_var, bg=self.MGRAY, fg='white')
+        sequence_sleep_entry.grid(row=row_base+3, column=1, sticky=EW, pady=5)
 
-        Label(settings_frame, text="Port AUX2:", bg=self.DGRAY, fg='white').grid(row=row_base+4, column=0, sticky=W, pady=5)
-        self.port_aux2_var = StringVar(value=options.get('port_aux2', ''))
-        self.port_aux2_combo = ttk.Combobox(settings_frame, textvariable=self.port_aux2_var, values=ports)
-        self.port_aux2_combo.grid(row=row_base+4, column=1, sticky=EW, pady=5)
-
-        CButton(settings_frame, text="Refresh Ports", command=self.refresh_ports).grid(row=row_base+1, column=2, rowspan=4, padx=10, sticky=N)
+        CButton(settings_frame, text="Refresh Ports", command=self.refresh_ports).grid(row=row_base+1, column=2, rowspan=3, padx=10, sticky=N)
 
         # Camera settings
-        cam_row = row_base + 5
+        cam_row = row_base + 4
         Label(settings_frame, text="Camera Settings", font=("Arial", 14, "bold"), 
               bg=self.DGRAY, fg='white').grid(row=cam_row, column=0, columnspan=3, pady=10, sticky=W)
         
         Label(settings_frame, text="Camera Index:", bg=self.DGRAY, fg='white').grid(row=cam_row+1, column=0, sticky=W, pady=5)
         self.camera_index_var = IntVar(value=options.get('camera_index', 0))
-        cams = self._list_cameras()
+        cams = [0, 1, 2]  # self._list_cameras() # REMOVED TEMPORARILY
         self.camera_combo = ttk.Combobox(settings_frame, values=cams, state='readonly', width=10)
         try:
             self.camera_combo.set(str(self.camera_index_var.get()) if self.camera_index_var.get() in cams else str(cams[0]))
         except Exception:
             pass
         self.camera_combo.grid(row=cam_row+1, column=1, sticky=EW, pady=5)
-        CButton(settings_frame, text="Refresh", command=self.refresh_cameras).grid(row=cam_row+1, column=2, padx=10)
+        CButton(settings_frame, text="Refresh", command=lambda: print("Camera refresh disabled")).grid(row=cam_row+1, column=2, padx=10)
         
         # Calibration settings
         calib_row = cam_row + 2
@@ -1234,11 +1318,39 @@ class SpektrometerApp(CustomTk):
         self.cal_y_var = DoubleVar(value=self.cal_px_per_step_y)
         Entry(settings_frame, textvariable=self.cal_y_var, bg=self.RGRAY, fg='white').grid(row=calib_row+2, column=1, sticky=EW, pady=5)
 
+        # Wavelength calibration settings
+        wave_row = calib_row + 3
+        Label(settings_frame, text="Wavelength Calibration", font=("Arial", 14, "bold"), 
+              bg=self.DGRAY, fg='white').grid(row=wave_row, column=0, columnspan=3, pady=10, sticky=W)
+        
+        # Calibration enable checkbox
+        self.lambda_cal_enabled_var = BooleanVar(value=options.get('lambda_calibration_enabled', True))
+        lambda_enable_check = Checkbutton(settings_frame, text="Enable Wavelength Calibration", 
+                                        variable=self.lambda_cal_enabled_var,
+                                        bg=self.DGRAY, fg='white', selectcolor=self.RGRAY,
+                                        activebackground=self.DGRAY, activeforeground='lightgreen',
+                                        font=('Arial', 10))
+        lambda_enable_check.grid(row=wave_row+1, column=0, columnspan=2, sticky=W, pady=5)
+        
+        # Lambda min
+        Label(settings_frame, text="λ min (nm):", bg=self.DGRAY, fg='white').grid(row=wave_row+2, column=0, sticky=W, pady=5)
+        self.lambda_min_var = DoubleVar(value=options.get('lambda_min', 400.0))
+        Entry(settings_frame, textvariable=self.lambda_min_var, bg=self.RGRAY, fg='white').grid(row=wave_row+2, column=1, sticky=EW, pady=5)
+        
+        # Lambda max
+        Label(settings_frame, text="λ max (nm):", bg=self.DGRAY, fg='white').grid(row=wave_row+3, column=0, sticky=W, pady=5)
+        self.lambda_max_var = DoubleVar(value=options.get('lambda_max', 700.0))
+        Entry(settings_frame, textvariable=self.lambda_max_var, bg=self.RGRAY, fg='white').grid(row=wave_row+3, column=1, sticky=EW, pady=5)
+        
+        # Info label
+        Label(settings_frame, text="Note: Wavelength calibration will override pixel scale in heatmaps", 
+              bg=self.DGRAY, fg='orange', font=("Arial", 9, "italic")).grid(row=wave_row+4, column=0, columnspan=3, sticky=W, pady=5)
+
         # Apply button - make it more prominent
         apply_frame = Frame(settings_frame, bg=self.DGRAY)
-        apply_frame.grid(row=calib_row+4, column=0, columnspan=3, pady=20)
+        apply_frame.grid(row=wave_row+6, column=0, columnspan=3, pady=20)
         
-        CButton(apply_frame, text="💾 SAVE SETTINGS", command=self.apply_settings, 
+        CButton(apply_frame, text="SAVE SETTINGS", command=self.apply_settings, 
                font=("Arial", 12, "bold"), fg='yellow').pack(pady=5)
         
         Label(apply_frame, text="Click to save all changes to options.json", 
@@ -1249,37 +1361,11 @@ class SpektrometerApp(CustomTk):
     def refresh_ports(self):
         try:
             ports = [p.device for p in serial.tools.list_ports.comports()]
-            for combo in [self.port_x_combo, self.port_y_combo, self.port_aux1_combo, self.port_aux2_combo]:
+            for combo in [self.port_x_combo, self.port_y_combo]:
                 combo.configure(values=ports)
             print(f"Ports refreshed: {ports}")
         except Exception as e:
             print(f"Ports refresh error: {e}")
-
-    def _list_cameras(self):
-        cameras = []
-        try:
-            for idx in range(0, 10):
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                if cap is not None and cap.isOpened():
-                    cameras.append(idx)
-                    cap.release()
-        except Exception:
-            pass
-        if not cameras:
-            cameras = [0]
-        return cameras
-
-    def save_camera_selection(self):
-        try:
-            idx = int(self.camera_combo.get()) if hasattr(self, 'camera_combo') and self.camera_combo.get() != '' else self.camera_index
-            # Update in-memory and file
-            self.camera_index = idx
-            options['camera_index'] = idx
-            with open('options.json', 'w') as f:
-                json.dump(options, f, indent=4)
-            print(f"Camera selection saved (index={idx})")
-        except Exception as e:
-            print(f"Camera save error: {e}")
 
     def save_calibration(self):
         try:
@@ -1298,15 +1384,6 @@ class SpektrometerApp(CustomTk):
         except Exception as e:
             print(f"Calibration save error: {e}")
 
-    def refresh_cameras(self):
-        cams = self._list_cameras()
-        self.camera_combo.configure(values=cams)
-        try:
-            self.camera_combo.current(cams.index(self.camera_index_var.get()) if self.camera_index_var.get() in cams else 0)
-        except Exception:
-            pass
-        print(f"Cameras found: {cams}")
-
     def _setup_styles(self):
         """Setup ttk styles"""
         style = ttk.Style()
@@ -1314,77 +1391,6 @@ class SpektrometerApp(CustomTk):
         style.configure('TNotebook', background=self.DGRAY, borderwidth=0)
         style.configure('TNotebook.Tab', background=self.DGRAY, foreground='white')
         style.map('TNotebook.Tab', background=[('selected', self.RGRAY)])
-
-    def _load_test_image_data(self):
-        """Load test image 2.bmp or create default data"""
-        try:
-            # Try to load 2.bmp image
-            if os.path.exists("2.bmp"):
-                image = Image.open("2.bmp")
-                
-                # Limit image size to prevent memory issues
-                max_size = (2048, 1536)  # Max size to prevent memory errors
-                if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
-                    print(f"Resizing large image from {image.size} to {max_size}")
-                    image = image.resize(max_size, Image.Resampling.LANCZOS)
-                
-                # Convert to grayscale if needed
-                if image.mode != 'L':
-                    image = image.convert('L')
-                    
-                # Convert to numpy array
-                image_array = np.array(image)
-                print(f"Loaded test image: 2.bmp, size: {image_array.shape}, memory: {image_array.nbytes / 1024:.1f} KB")
-                
-                # Calculate spectrum safely
-                if image_array.size > 0:
-                    spectrum = np.mean(image_array, axis=0)
-                    self.spectrum_data = self._resample_to_2048(spectrum)
-                    self._update_spectrum_plot()
-                    
-                return image_array
-            else:
-                print("Test image 2.bmp not found, using default data")
-                return np.zeros((100, 100), dtype=np.uint8)
-        except Exception as e:
-            print(f"Error loading test image: {e}")
-            return np.zeros((100, 100), dtype=np.uint8)
-
-    def _style_toolbar(self, toolbar):
-        """Style toolbar to match dark theme"""
-        toolbar.config(bg=self.DGRAY)
-        
-        # Style all toolbar children
-        for child in toolbar.winfo_children():
-            try:
-                if hasattr(child, 'config'):
-                    child.config(bg=self.DGRAY)
-                    
-                    # Handle different widget types
-                    widget_class = child.winfo_class()
-                    
-                    if widget_class == 'Button':
-                        child.config(
-                            bg=self.RGRAY, 
-                            fg='white',
-                            activebackground=self.MGRAY,
-                            activeforeground='white',
-                            relief='flat',
-                            bd=1
-                        )
-                    elif widget_class == 'Frame':
-                        child.config(bg=self.DGRAY)
-                        # Recursively style frame children
-                        for subchild in child.winfo_children():
-                            try:
-                                subchild.config(bg=self.DGRAY, fg='white')
-                            except:
-                                pass
-                    elif widget_class == 'Label':
-                        child.config(bg=self.DGRAY, fg='white')
-                    
-            except Exception as e:
-                pass  # Ignore styling errors for unsupported widgets
 
     def _on_canvas_configure(self, event):
         """Handle canvas resize"""
@@ -1409,14 +1415,14 @@ class SpektrometerApp(CustomTk):
             
             # Detect error messages and apply red color
             is_error = any(keyword in message.lower() for keyword in [
-                'błąd', 'error', 'exception', 'failed', 'nie powiodł', 'nie są podłączone',
-                'sprawdź połączenie', 'traceback', 'brak wykrytego'
+                'error', 'error', 'exception', 'failed', 'failed', 'not connected',
+                'check connection', 'traceback', 'not detected'
             ])
             
             # Detect warning messages and apply yellow color
             is_warning = any(keyword in message.lower() for keyword in [
-                'ostrzeżenie', 'warning', 'uwaga', 'attention', 'simulation', 'symulacja',
-                'not connected', 'brak połączenia', 'przybliżona', 'approximate'
+                'warning', 'warning', 'attention', 'attention', 'simulation', 'simulation',
+                'not connected', 'not connected', 'approximate', 'approximate'
             ])
             
             # Choose appropriate tag
@@ -1440,9 +1446,6 @@ class SpektrometerApp(CustomTk):
         init_thread = threading.Thread(target=self._background_initialization, daemon=True)
         init_thread.start()
         
-        # Start update loop immediately - don't wait for initialization
-        self.update_loop()
-        
         print("GUI ready - background initialization in progress...")
 
     def _background_initialization(self):
@@ -1455,96 +1458,73 @@ class SpektrometerApp(CustomTk):
                 self.after_idle(lambda: print("Spectrometer initialized successfully"))
             else:
                 self.after_idle(lambda: print("Spectrometer initialization failed"))
+                # Do not auto-load any test image; require real camera frames
             
             print("Background: Loading measurements...")
             # Load measurements in background
             self.load_measurements()
             
-            print("Background: Starting worker threads...")
-            # Start background threads after everything is ready
-            self._start_background_threads()
+            # Auto-initialize PixeLink camera
+            print("Background: Auto-initializing PixeLink...")
+            self.after_idle(self._auto_init_pixelink)
             
             self.after_idle(lambda: print("✅ System initialization complete"))
             
         except Exception as e:
             self.after_idle(lambda: print(f"❌ Background initialization error: {e}"))
 
-    def _fallback_to_test_image(self):
-        """Fallback to test image when camera initialization fails"""
-        if not self.is_live_streaming:
-            self.pixelink_status.config(text="Status: No camera - Using test image")
-            print("🔸 No Pixelink camera available, using test image instead")
-            print("🔸 Make sure Pixelink camera is connected and drivers are installed")
-            self.load_test_image()
+    def _auto_init_pixelink(self):
+        """Auto-initialize PixeLink camera without user interaction"""
+        try:
+            print("🔄 Auto-initializing PixeLink camera...")
+            
+            # Initialize PixeLink
+            if self.init_pixelink():
+                print("✅ PixeLink auto-initialized successfully")
+                
+                # Auto-start streaming after short delay
+                self.after(1000, self._auto_start_pixelink)  # 1 second delay
+            else:
+                print("❌ PixeLink auto-initialization failed")
+                
+        except Exception as e:
+            print(f"❌ PixeLink auto-init error: {e}")
+    
+    def _auto_start_pixelink(self):
+        """Auto-start PixeLink streaming"""
+        try:
+            print("🔄 Auto-starting PixeLink stream...")
+            self.start_pixelink()
+            print("✅ PixeLink stream auto-started")
+        except Exception as e:
+            print(f"❌ PixeLink auto-start error: {e}")
+
+    # REMOVED: _init_display_placeholders() - function removed temporarily
+
+    # REMOVED: _fallback_to_test_image() - function removed temporarily
 
     def cleanup(self):
         """Cleanup resources"""
         print("Cleaning up...")
-        
+        self._stop_threads = True
         try:
-            self.camera_manager.stop()
-            self.spectrometer_manager.stop()
-            self.motor_controller.close()
-            # Close aux serials
-            if hasattr(self, 'aux_serial'):
-                for key, ser in list(self.aux_serial.items()):
-                    try:
-                        ser.close()
-                    except Exception:
-                        pass
-                self.aux_serial.clear()
+            if hasattr(self, 'camera_manager'):
+                self.camera_manager.stop()
+            if hasattr(self, 'spectrometer_manager'):
+                self.spectrometer_manager.stop()
+            if hasattr(self, 'motor_controller'):
+                self.motor_controller.close()
         except Exception as e:
             print(f"Cleanup error: {e}")
-        
         # Restore stdout
-        sys.stdout = sys.__stdout__
-
-    def start_camera(self):
-        """Start camera"""
         try:
-            # Switch camera if selection changed
-            selected = None
-            try:
-                selected = int(self.camera_combo.get()) if hasattr(self, 'camera_combo') else self.camera_index
-            except Exception:
-                selected = self.camera_index
-            if selected is None:
-                selected = options.get('camera_index', 0)
-            if selected != self.camera_manager.camera_index:
-                self.camera_manager.stop()
-                self.camera_manager = CameraManager(camera_index=selected)
-            self.camera_manager.start()
-            self.camera_index = selected
-            # Verify camera opened
-            opened = False
-            try:
-                opened = self.camera_manager.detector is not None and self.camera_manager.detector.isOpened()
-            except Exception:
-                opened = False
-            if opened:
-                print(f"Camera started (index={selected})")
-                self.cam_status.configure(text=f"Pixelink Camera: Running (index={selected})", fg='lightgreen')
-            else:
-                print("No camera detected or failed to open. Showing placeholder.")
-                self.cam_status.configure(text="Pixelink Camera: Failed to start", fg='red')
-                self._draw_camera_placeholder()
-        except Exception as e:
-            print(f"Camera start error: {e}")
-            self.cam_status.configure(text=f"Pixelink Camera: Error - {e}", fg='red')
-            try:
-                self._draw_camera_placeholder()
-            except Exception:
-                pass
-                
-    def stop_camera(self):
-        """Stop camera"""
-        self.camera_manager.stop()
-        print("Camera stopped")
-        self.cam_status.configure(text="Pixelink Camera: Stopped", fg='orange')
-        try:
-            self._draw_camera_placeholder()
+            sys.stdout = sys.__stdout__
         except Exception:
             pass
+
+    # REMOVED: start_camera() - function removed temporarily
+                
+    # REMOVED: stop_camera() - function removed temporarily
 
     def _move_and_record(self, direction, steps=None):
         try:
@@ -1553,150 +1533,9 @@ class SpektrometerApp(CustomTk):
         except Exception as e:
             print(f"Move error: {e}")
 
-    def on_spectrum_mouse_move(self, event):
-        """Handle mouse movement over spectrum plot"""
-        if event.inaxes == self.spectrum_ax:
-            try:
-                # Remove previous crosshair
-                if self.spectrum_crosshair_v:
-                    self.spectrum_crosshair_v.remove()
-                if self.spectrum_crosshair_h:
-                    self.spectrum_crosshair_h.remove()
-                if self.spectrum_annotation:
-                    self.spectrum_annotation.remove()
-                
-                # Add new crosshair
-                self.spectrum_crosshair_v = self.spectrum_ax.axvline(event.xdata, color='red', alpha=0.7, linestyle='--')
-                self.spectrum_crosshair_h = self.spectrum_ax.axhline(event.ydata, color='red', alpha=0.7, linestyle='--')
-                
-                # Add annotation with values
-                self.spectrum_annotation = self.spectrum_ax.annotate(
-                    f'X: {event.xdata:.1f}\nY: {event.ydata:.1f}',
-                    xy=(event.xdata, event.ydata),
-                    xytext=(20, 20), textcoords='offset points',
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.8),
-                    arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'),
-                    fontsize=10
-                )
-                
-                self.spectrum_canvas.draw_idle()
-                
-            except Exception as e:
-                pass  # Ignore errors during mouse movement
+    # REMOVED: Mouse interaction functions - not used in simple spectrum view
 
-    def on_spectrum_click(self, event):
-        """Handle mouse click on spectrum plot"""
-        if event.inaxes == self.spectrum_ax and event.dblclick:
-            try:
-                # Double-click to mark peak
-                x_pos = event.xdata
-                y_pos = event.ydata
-                
-                # Add permanent marker
-                self.spectrum_ax.plot(x_pos, y_pos, 'ro', markersize=8, markeredgecolor='white', markeredgewidth=2)
-                self.spectrum_ax.annotate(
-                    f'Peak\n({x_pos:.1f}, {y_pos:.1f})',
-                    xy=(x_pos, y_pos),
-                    xytext=(10, 30), textcoords='offset points',
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='orange', alpha=0.9),
-                    arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2'),
-                    fontsize=9, color='black'
-                )
-                
-                self.spectrum_canvas.draw()
-                print(f"Peak marked at: X={x_pos:.1f}, Y={y_pos:.1f}")
-                
-            except Exception as e:
-                print(f"Peak marking error: {e}")
-
-    def reset_spectrum_view(self):
-        """Reset spectrum view to show all data"""
-        try:
-            self.spectrum_ax.set_xlim(0, len(self.spectrum_data))
-            self.spectrum_ax.set_ylim(0, np.max(self.spectrum_data) * 1.1 if np.max(self.spectrum_data) > 0 else 1000)
-            
-            # Clear annotations and markers
-            annotations = [child for child in self.spectrum_ax.get_children() 
-                          if hasattr(child, 'get_text') or 
-                          (hasattr(child, 'get_marker') and child.get_marker() == 'o')]
-            for ann in annotations:
-                try:
-                    ann.remove()
-                except:
-                    pass
-            
-            self.spectrum_canvas.draw()
-            print("Spectrum view reset")
-            
-        except Exception as e:
-            print(f"Spectrum view reset error: {e}")
-
-    def auto_scale_spectrum(self):
-        """Auto-scale spectrum to fit data"""
-        try:
-            if len(self.spectrum_data) > 0:
-                # Find data range
-                y_min = np.min(self.spectrum_data)
-                y_max = np.max(self.spectrum_data)
-                y_range = y_max - y_min
-                
-                # Prevent identical ylim values
-                if abs(y_range) < 1e-10:  # Values are essentially the same
-                    y_center = y_min if y_min != 0 else 1
-                    margin = abs(y_center) * 0.1
-                    self.spectrum_ax.set_ylim(y_center - margin, y_center + margin)
-                else:
-                    # Add 10% margin
-                    margin = y_range * 0.1
-                    self.spectrum_ax.set_ylim(y_min - margin, y_max + margin)
-                
-                # Auto-scale X to show interesting part (where there's signal)
-                threshold = y_min + y_range * 0.1  # 10% above minimum
-                signal_indices = np.where(self.spectrum_data > threshold)[0]
-                
-                if len(signal_indices) > 0:
-                    x_start = max(0, signal_indices[0] - 50)
-                    x_end = min(len(self.spectrum_data), signal_indices[-1] + 50)
-                    self.spectrum_ax.set_xlim(x_start, x_end)
-                
-                self.spectrum_canvas.draw()
-                print(f"Auto-scaled spectrum: Y=[{y_min:.1f}, {y_max:.1f}]")
-                
-        except Exception as e:
-            print(f"Auto-scale error: {e}")
-
-    def set_spectrum_range(self):
-        """Set spectrum display range"""
-        try:
-            xmin = float(self.xmin_var.get())
-            xmax = float(self.xmax_var.get())
-            
-            # Update plot range
-            self.spectrum_ax.set_xlim(xmin, xmax)
-            
-            # Add range indicator lines
-            if hasattr(self, 'range_lines'):
-                for line in self.range_lines:
-                    try:
-                        line.remove()
-                    except:
-                        pass
-            
-            line1 = self.spectrum_ax.axvline(xmin, color='red', linestyle='--', alpha=0.7, linewidth=2)
-            line2 = self.spectrum_ax.axvline(xmax, color='red', linestyle='--', alpha=0.7, linewidth=2)
-            self.range_lines = [line1, line2]
-            
-            # Add range labels
-            self.spectrum_ax.text(xmin, self.spectrum_ax.get_ylim()[1] * 0.9, f'Min: {xmin}', 
-                                 rotation=90, verticalalignment='top', color='red', fontweight='bold')
-            self.spectrum_ax.text(xmax, self.spectrum_ax.get_ylim()[1] * 0.9, f'Max: {xmax}', 
-                                 rotation=90, verticalalignment='top', color='red', fontweight='bold')
-            
-            self.spectrum_canvas.draw()
-            print(f"Spectrum range set: {xmin} - {xmax}")
-            
-        except Exception as e:
-            print(f"Range setting error: {e}")
+    # REMOVED: Spectrum control functions - not used in simple view
 
     def _update_spectrum_plot(self):
         """Update spectrum plot with enhanced features - completely non-blocking"""
@@ -1726,186 +1565,132 @@ class SpektrometerApp(CustomTk):
                         else:
                             self.spectrum_ax.set_ylim(data_min * 0.9, data_max * 1.1)
                 
-                # Use after_idle to queue canvas update - completely non-blocking
-                self.after_idle(self._safe_canvas_update)
+                # Safe canvas update in main thread - inline
+                def safe_canvas_update():
+                    try:
+                        if hasattr(self, 'spectrum_canvas'):
+                            self.spectrum_canvas.draw_idle()
+                    except Exception:
+                        pass  # Ignore canvas errors to prevent freezing
+                
+                self.after_idle(safe_canvas_update)
                 
         except Exception as e:
             print(f"Spectrum plot update error: {e}")
 
-    def _safe_canvas_update(self):
-        """Safe canvas update in main thread"""
-        try:
-            if hasattr(self, 'spectrum_canvas'):
-                self.spectrum_canvas.draw_idle()
-        except Exception:
-            pass  # Ignore canvas errors to prevent freezing
-
-    def load_test_image(self):
-        """Load test image button handler"""
-        try:
-            if os.path.exists("2.bmp"):
-                # Stop live streaming when manually loading test image
-                self.is_live_streaming = False
-                
-                image_data = self._load_test_image_data()
-                self.update_pixelink_display(image_data)
-                self.pixelink_status.config(text="Status: Test image loaded")
-                self.spectrum_data = self._resample_to_2048(np.mean(image_data, axis=0))
-                self._update_spectrum_plot()  # Update spectrum with test image data
-                
-                print("Test image loaded successfully")
-            else:
-                print("Test image 2.bmp not found")
-                self.pixelink_status.config(text="Status: Test image not found")
-        except Exception as e:
-            print(f"Error loading test image: {e}")
-            self.pixelink_status.config(text="Status: Test image error")
+    # REMOVED: load_test_image() - function removed temporarily
 
     def init_pixelink(self):
-        """Initialize Pixelink camera"""
+        """Initialize Pixelink camera with enhanced status updates"""
         try:
+            print("=== PIXELINK INITIALIZATION ===")
+            
+            # Check if Pixelink API is available
+            try:
+                print("✓ Pixelink API imported successfully")
+            except ImportError as e:
+                print(f"✗ Pixelink API import failed: {e}")
+                self.pixelink_status.config(text="❌ API Missing", fg='red')
+                if hasattr(self, 'live_indicator'):
+                    self.live_indicator.configure(text="❌ API Missing", fg='red')
+                return False
+                
             if self.spectrometer_manager.initialize():
-                self.pixelink_status.config(text="Status: Initialized")
-                print("Pixelink camera initialized successfully")
+                self.pixelink_status.config(text="✅ Initialized", fg='lightgreen')
+                if hasattr(self, 'live_indicator'):
+                    self.live_indicator.configure(text="✅ Ready", fg='yellow')
+                print("✓ Pixelink camera initialized successfully")
+                return True
             else:
-                # If initialization fails and not live streaming, load test image
-                if not self.is_live_streaming:
-                    self.pixelink_status.config(text="Status: Using test image")
-                    print("Pixelink camera initialization failed, loading test image")
-                    self.load_test_image()
-                else:
-                    self.pixelink_status.config(text="Status: Init failed but streaming continues")
-                    print("Pixelink camera initialization failed, but live streaming continues")
+                self.pixelink_status.config(text="❌ Init Failed", fg='red')
+                if hasattr(self, 'live_indicator'):
+                    self.live_indicator.configure(text="❌ Init Failed", fg='red')
+                print("⚠ Pixelink camera initialization failed")
+                return False
         except Exception as e:
-            # If error and not live streaming, load test image
-            if not self.is_live_streaming:
-                self.pixelink_status.config(text="Status: Error - Using test image")
-                print(f"Pixelink initialization error: {e}, loading test image")
-                self.load_test_image()
-            else:
-                self.pixelink_status.config(text="Status: Error but streaming continues")
-                print(f"Pixelink initialization error: {e}, but live streaming continues")
+            self.pixelink_status.config(text="🔴 Init Error", fg='red')
+            if hasattr(self, 'live_indicator'):
+                self.live_indicator.configure(text="🔴 Error", fg='red')
+            print(f"✗ Pixelink initialization error: {e}")
+            return False
 
     def start_pixelink(self):
-        """Start Pixelink stream"""
+        """Start Pixelink stream with enhanced status updates"""
         try:
             if hasattr(self.spectrometer_manager, 'hCamera') and self.spectrometer_manager.hCamera:
                 self.spectrometer_manager.start()
-                self.is_live_streaming = True  # Mark as live streaming
-                self.pixelink_status.config(text="Status: Streaming")
-                print("Pixelink stream started")
+                self.pixelink_status.config(text="🟢 Live Streaming", fg='lightgreen')
+                if hasattr(self, 'live_indicator'):
+                    self.live_indicator.configure(text="🟢 Live", fg='lightgreen')
+                print("✓ Pixelink live stream started")
             else:
-                # If no camera, simulate with test image updates
-                self.is_live_streaming = False  # Not live streaming
-                self.pixelink_status.config(text="Status: Simulating with test image")
-                print("No camera available, using test image")
-                self._start_test_image_simulation()
+                self.pixelink_status.config(text="❌ No Camera", fg='red')
+                if hasattr(self, 'live_indicator'):
+                    self.live_indicator.configure(text="⚫ No Camera", fg='red')
+                print("✗ No Pixelink camera available")
         except Exception as e:
-            self.is_live_streaming = False  # Not live streaming due to error
-            self.pixelink_status.config(text="Status: Stream error - Using test image")
-            print(f"Pixelink stream error: {e}, using test image")
-            self._start_test_image_simulation()
-
-    def _start_test_image_simulation(self):
-        """Start test image simulation"""
-        def simulate_updates():
-            """Simulate camera updates with test image"""
-            try:
-                # Stop simulation if live streaming started
-                if self.is_live_streaming:
-                    print("Stopping simulation - live streaming started")
-                    return
-                    
-                # Add some noise to simulate live data
-                if hasattr(self, 'pixelink_image_data'):
-                    noise = np.random.random(self.pixelink_image_data.shape) * 10
-                    simulated_data = self.pixelink_image_data + noise
-                    self.update_pixelink_display(simulated_data)
-                
-                # Schedule next update only if not live streaming
-                if not self.is_live_streaming:
-                    self.after(100, simulate_updates)  # Update every 100ms
-                
-            except Exception as e:
-                print(f"Simulation error: {e}")
-        
-        # Start simulation
-        simulate_updates()
+            self.pixelink_status.config(text="🔴 Stream Error", fg='red')
+            if hasattr(self, 'live_indicator'):
+                self.live_indicator.configure(text="🔴 Error", fg='red')
+            print(f"✗ Pixelink stream error: {e}")
 
     def stop_pixelink(self):
-        """Stop Pixelink stream"""
+        """Stop Pixelink stream with enhanced status updates"""
         try:
             self.spectrometer_manager.stop()
-            self.is_live_streaming = False  # Reset streaming flag
-            self.pixelink_status.config(text="Status: Stopped")
-            print("Pixelink stream stopped")
+            self.pixelink_status.config(text="⏹️ Stopped", fg='yellow')
+            if hasattr(self, 'live_indicator'):
+                self.live_indicator.configure(text="⚫ Offline", fg='red')
+            print("✓ Pixelink stream stopped")
         except Exception as e:
-            self.is_live_streaming = False  # Reset streaming flag
-            print(f"Pixelink stop error: {e}")
+            self.pixelink_status.config(text="🔴 Stop Error", fg='red')
+            if hasattr(self, 'live_indicator'):
+                self.live_indicator.configure(text="🔴 Error", fg='red')
+            print(f"✗ Pixelink stop error: {e}")
 
-    def reset_pixelink_view(self):
-        """Reset Pixelink view to default"""
-        try:
-            self.pixelink_ax.set_xlim(0, self.pixelink_image_data.shape[1])
-            self.pixelink_ax.set_ylim(0, self.pixelink_image_data.shape[0])
-            self.pixelink_canvas.draw()
-            print("Pixelink view reset")
-        except Exception as e:
-            print(f"View reset error: {e}")
-
-    def update_pixelink_display(self, image_data):
-        """Update Pixelink display with new image data"""
-        try:
-            if image_data is not None:
-                # Handle data from spectrometer queue (dict with frame and descriptor)
-                if isinstance(image_data, dict) and 'frame' in image_data and 'descriptor' in image_data:
-                    frame = image_data['frame']
-                    descriptor = image_data['descriptor']
-                    
-                    # Use full frame buffer without cropping - let PIL handle it
-                    self.pixelink_image_data = frame
-                else:
-                    # Handle direct image data (for compatibility)
-                    self.pixelink_image_data = image_data
-                
-                # Mark as live streaming when receiving real camera data
-                if hasattr(self.spectrometer_manager, 'hCamera') and self.spectrometer_manager.hCamera:
-                    self.is_live_streaming = True
-                
-                # NOTE: Image display update is now handled in main update_loop with throttling
-                # Only calculate spectrum here for fast updates
-                
-                # Calculate spectrum from image data
-                raw_spectrum = np.mean(self.pixelink_image_data, axis=0)
-                self.spectrum_data = self._resample_to_2048(raw_spectrum)
-                self._update_spectrum_plot()
                 
         except Exception as e:
             print(f"Pixelink display update error: {e}")
 
+    def stop_measurement_sequence(self):
+        """Stop running measurement sequence"""
+        if self._sequence_running:
+            self._sequence_stop_requested = True
+            print("🛑 STOPPING MEASUREMENT SEQUENCE...")
+            # Update button states
+            if hasattr(self, 'start_seq_btn'):
+                self.start_seq_btn.config(state=NORMAL)
+            if hasattr(self, 'stop_seq_btn'):
+                self.stop_seq_btn.config(state=DISABLED)
+
     def start_measurement_sequence(self):
         """Start automated measurement sequence"""
-        print("🔥 PRZYCISK SEKWENCJI ZOSTAŁ KLIKNIĘTY!")
+        print("🔥 SEQUENCE BUTTON HAS BEEN CLICKED!")
         
         def sequence():
             try:
-                print("🚀 URUCHAMIANIE SEKWENCJI POMIAROWEJ...")
-                print(f"Kalibracja: {getattr(self, 'calibration', False)}")
-                roi_coords = getattr(self, 'roi_coordinates', None)
-                print(f"ROI coordinates: {roi_coords}")
+                # Set sequence running flags
+                self._sequence_running = True
+                self._sequence_stop_requested = False
                 
-                # Guards: require calibration and scan area
+                # Update button states
+                if hasattr(self, 'start_seq_btn'):
+                    self.start_seq_btn.config(state=DISABLED)
+                if hasattr(self, 'stop_seq_btn'):
+                    self.stop_seq_btn.config(state=NORMAL)
+                
+                print("🚀 STARTING MEASUREMENT SEQUENCE...")
+                print(f"Kalibracja: {getattr(self, 'calibration', False)}")
+                
+                # Guards: require calibration
                 if not getattr(self, 'calibration', False):
-                    print("❌ BŁĄD: Kalibracja wymagana. Przeprowadź kalibrację w zakładce Camera & Controls.")
-                    return
-                if not roi_coords:
-                    print("❌ BŁĄD: Obszar skanowania nie został ustawiony. Zaznacz ROI na obrazie kamery.")
+                    print("❌ ERROR: Calibration required. Perform calibration in Camera & Controls tab.")
                     return
                 
                 # Check motor connection
                 if not self.motor_controller.connected:
-                    print("BŁĄD: Silniki nie są podłączone!")
-                    print("Sprawdź połączenia portów szeregowych w zakładce Settings.")
+                    print("ERROR: Motors are not connected!")
+                    print("Check serial port connections in Settings tab.")
                     return
                     
                 # Check camera/spectrometer connection  
@@ -1918,17 +1703,24 @@ class SpektrometerApp(CustomTk):
                         camera_connected = False
                 
                 if not camera_connected and not hasattr(self, 'pixelink_image_data'):
-                    print("BŁĄD: Kamera/spektrometr nie jest podłączony!")
-                    print("Sprawdź połączenie urządzenia.")
+                    print("ERROR: Camera/spectrometer is not connected!")
+                    print("Check device connection.")
                     return
                 
                 # Create data folder
-                folder = "pomiar_dane"
+                folder = "measurement_data"
                 os.makedirs(folder, exist_ok=True)
-                filename = os.path.join(folder, f"pomiar_{time.strftime('%Y%m%d_%H%M%S')}_spectra.csv")
+                filename = os.path.join(folder, f"measurement_{time.strftime('%Y%m%d_%H%M%S')}_spectra.csv")
                 
-                # Get ROI bounds and calculate scan parameters
-                x, y, w, h = self.get_roi_bounds()
+                # Get image dimensions for scan parameters
+                if hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
+                    h, w = self.pixelink_image_data.shape[:2]
+                    x, y = 0, 0  # Start from top-left corner
+                else:
+                    # Default image size if no camera data
+                    w, h = 640, 480
+                    x, y = 0, 0
+                    
                 step_x = self.step_x.get()
                 step_y = self.step_y.get()
                 
@@ -1937,9 +1729,9 @@ class SpektrometerApp(CustomTk):
                 ny = max(1, (h // step_y) + 1)
                 total_points = nx * ny
                 
-                print(f"📐 Obszar skanowania: {w}x{h} px, startując od ({x}, {y})")
+                print(f"📐 Scan area: {w}x{h} px, starting from ({x}, {y})")
                 print(f"📊 Krok skanowania: {step_x}x{step_y} px")
-                print(f"🎯 Punkty skanowania: {nx} x {ny} = {total_points} punktów")
+                print(f"🎯 Scan points: {nx} x {ny} = {total_points} points")
                 
                 # Initialize progress tracking
                 current_point = 0
@@ -1953,7 +1745,7 @@ class SpektrometerApp(CustomTk):
                     writer.writerow(['measurement_id', 'x_pixel', 'y_pixel', 'x_motor', 'y_motor'] + 
                                   [f'wavelength_{i}' for i in range(count)])
                     
-                    print("🏁 Rozpoczynam skanowanie kwadratowe od narożnika...")
+                    print("🏁 Starting square scan from corner...")
                     
                     # Use settings from options.json for scanning area
                     scan_step_x = self.step_x.get()
@@ -1961,23 +1753,23 @@ class SpektrometerApp(CustomTk):
                     scan_width = self.scan_width.get()
                     scan_height = self.scan_height.get()
                     
-                    print(f"📋 Parametry skanowania z ustawień:")
+                    print(f"📋 Scan parameters from settings:")
                     print(f"   Krok X: {scan_step_x}, Krok Y: {scan_step_y}")
-                    print(f"   Szerokość: {scan_width}, Wysokość: {scan_height}")
+                    print(f"   Width: {scan_width}, Height: {scan_height}")
                     
                     # Calculate number of points in each direction
                     points_x = scan_width // scan_step_x + 1
                     points_y = scan_height // scan_step_y + 1
                     total_points = points_x * points_y
                     
-                    print(f"📐 Siatka skanowania: {points_x} x {points_y} = {total_points} punktów")
+                    print(f"📐 Scan grid: {points_x} x {points_y} = {total_points} points")
                     
                     # Calculate offset to move to top-left corner of scan area
                     # From current position, move to corner where scanning will start
                     offset_x = -scan_width // 2
                     offset_y = -scan_height // 2
                     
-                    print(f"📍 Przesunięcie do narożnika od obecnego położenia: ({offset_x}, {offset_y})")
+                    print(f"📍 Move to corner from current position: ({offset_x}, {offset_y})")
                     
                     # Move to top-left corner of scan area
                     if offset_x != 0:
@@ -1988,15 +1780,25 @@ class SpektrometerApp(CustomTk):
                         self.motor_controller.move(dir_y, abs(offset_y))
                     
                     time.sleep(1)
-                    print("✅ W narożniku - gotowy do skanowania")
+                    print("✅ At corner - ready to scan")
                     
                     current_point = 0
                     
                     # Main scanning loop - square grid from corner
                     for iy in range(points_y):
-                        print(f"📍 Skanowanie rzędu {iy + 1}/{points_y}")
+                        # Check for stop request
+                        if self._sequence_stop_requested:
+                            print("🛑 Sequence stopped by user")
+                            break
+                            
+                        print(f"📍 Scanning row {iy + 1}/{points_y}")
                         
                         for ix in range(points_x):
+                            # Check for stop request
+                            if self._sequence_stop_requested:
+                                print("🛑 Sequence stopped by user")
+                                break
+                                
                             current_point += 1
                             
                             # Calculate absolute position in grid (starting from 0,0 at corner)
@@ -2036,11 +1838,12 @@ class SpektrometerApp(CustomTk):
                             print(f"📊 Punkt {current_point}/{total_points} ({progress:.1f}%) - "
                                   f"Siatka: ({grid_x}, {grid_y}) - ETA: {eta:.0f}s")
                             
-                            # Small delay for data acquisition
-                            time.sleep(0.02)
+                            # Configurable delay for sequence measurements
+                            sequence_sleep = options.get('sequence_sleep', 0.1)
+                            time.sleep(sequence_sleep)
                 
                 # Return to original position (before scan started)
-                print("🔙 Powrót do pozycji sprzed skanowania...")
+                print("🔙 Returning to position before scan...")
                 
                 # First move back to corner (where we started scanning)
                 final_grid_x = (points_x - 1) * scan_step_x
@@ -2060,19 +1863,27 @@ class SpektrometerApp(CustomTk):
                     dir_y_back = 'u' if offset_y < 0 else 'd'
                     self.motor_controller.move(dir_y_back, abs(offset_y))
                 
-                print("✅ Powrócono do pozycji sprzed skanowania")
+                print("✅ Returned to position before scan")
                 
                 total_time = time.time() - start_time
-                print(f"✅ SKANOWANIE ZAKOŃCZONE!")
-                print(f"📁 Zapisano {total_points} pomiarów do: {filename}")
+                print(f"✅ SCAN COMPLETED!")
+                print(f"📁 Saved {total_points} measurements to: {filename}")
                 print(f"⏱️ Czas skanowania: {total_time:.1f} sekund")
-                print(f"⚡ Średnio {total_time/total_points:.2f} s/punkt")
+                print(f"⚡ Average {total_time/total_points:.2f} s/point")
                 
                 # Reload measurements
                 self.after(100, self.load_measurements)
                 
             except Exception as e:
                 print(f"Sequence error: {e}")
+            finally:
+                # Reset sequence flags and button states
+                self._sequence_running = False
+                self._sequence_stop_requested = False
+                if hasattr(self, 'start_seq_btn'):
+                    self.start_seq_btn.config(state=NORMAL)
+                if hasattr(self, 'stop_seq_btn'):
+                    self.stop_seq_btn.config(state=DISABLED)
         
         # Run sequence in separate thread regardless of motor connection
         if not self.motor_controller.connected:
@@ -2098,13 +1909,15 @@ class SpektrometerApp(CustomTk):
             'xmax': self.xmax_var.get(),
             'port_x': self.port_x_var.get(),
             'port_y': self.port_y_var.get(),
-            'port_aux1': self.port_aux1_var.get() if hasattr(self, 'port_aux1_var') else options.get('port_aux1', ''),
-            'port_aux2': self.port_aux2_var.get() if hasattr(self, 'port_aux2_var') else options.get('port_aux2', ''),
+            'sequence_sleep': self.sequence_sleep_var.get() if hasattr(self, 'sequence_sleep_var') else options.get('sequence_sleep', 0.1),
             'camera_index': int(self.camera_combo.get()) if hasattr(self, 'camera_combo') and self.camera_combo.get() != '' else options.get('camera_index', 0),
             'cal_px_per_step_x': float(self.cal_x_var.get()) if hasattr(self, 'cal_x_var') else options.get('cal_px_per_step_x', 0.0),
             'cal_px_per_step_y': float(self.cal_y_var.get()) if hasattr(self, 'cal_y_var') else options.get('cal_px_per_step_y', 0.0),
             'cal_sign_x': int(getattr(self, 'cal_sign_x', options.get('cal_sign_x', 1))),
             'cal_sign_y': int(getattr(self, 'cal_sign_y', options.get('cal_sign_y', 1))),
+            'lambda_min': float(self.lambda_min_var.get()) if hasattr(self, 'lambda_min_var') else options.get('lambda_min', 400.0),
+            'lambda_max': float(self.lambda_max_var.get()) if hasattr(self, 'lambda_max_var') else options.get('lambda_max', 700.0),
+            'lambda_calibration_enabled': bool(self.lambda_cal_enabled_var.get()) if hasattr(self, 'lambda_cal_enabled_var') else options.get('lambda_calibration_enabled', True),
             'await': 0.01
         }
         
@@ -2133,26 +1946,6 @@ class SpektrometerApp(CustomTk):
                 self.camera_manager = CameraManager(camera_index=new_cam)
                 self.camera_index = new_cam
                 print(f"Camera set to index {new_cam}")
-
-            # (Re)open AUX ports
-            try:
-                # Close existing
-                for key, ser in list(self.aux_serial.items()):
-                    try:
-                        ser.close()
-                    except Exception:
-                        pass
-                    self.aux_serial.pop(key, None)
-                for label, port in [('aux1', settings.get('port_aux1', '')), ('aux2', settings.get('port_aux2', ''))]:
-                    if port:
-                        try:
-                            ser = serial.Serial(port)
-                            self.aux_serial[label] = ser
-                            print(f"AUX port {label} opened on {port}")
-                        except Exception as e:
-                            print(f"Failed to open AUX port {label} on {port}: {e}")
-            except Exception as e:
-                print(f"AUX ports reinit error: {e}")
             
         except Exception as e:
             print(f"Settings save error: {e}")
@@ -2164,17 +1957,16 @@ class SpektrometerApp(CustomTk):
             return
         self._calibration_mode = f"{axis}_before"
         print(f"Kalibracja {axis.upper()} — kliknij punkt referencyjny na obrazie.")
-        # Temporarily bind a one-off click
-        cid = self.pixelink_canvas.mpl_connect('button_press_event', lambda e, ax=axis: self._on_calibration_click(e, ax))
-        self._pixelink_event_cids.append(cid)
+        # Canvas display was removed - calibration disabled
+        print("Canvas display removed - manual calibration unavailable")
 
     def start_calibration_both(self):
         try:
             # Check motor connection first
             if not self.motor_controller.connected:
-                print("BŁĄD: Silniki nie są podłączone!")
-                print("Sprawdź połączenia portów szeregowych w zakładce Settings.")
-                print("Porty X i Y muszą być dostępne do kalibracji.")
+                print("ERROR: Motors are not connected!")
+                print("Check serial port connections in Settings tab.")
+                print("X and Y ports must be available for calibration.")
                 return
                 
             # Check camera connection
@@ -2187,16 +1979,19 @@ class SpektrometerApp(CustomTk):
                     camera_connected = False
             
             if not camera_connected and not hasattr(self, 'pixelink_image_data'):
-                print("BŁĄD: Kamera nie jest podłączona i brak obrazu testowego!")
-                print("Sprawdź połączenie kamery lub użyj obrazu testowego.")
+                print("ERROR: Camera is not connected and no test image available!")
+                print("Check camera connection or use test image.")
                 return
                 
-            print("Automatyczna kalibracja: wykonuję ruchy X i Y, analizuję zmiany obrazu...")
+            print("Automatic calibration: performing X and Y movements, analyzing image changes...")
             # Clear previous calibration data
             self._calibration_points = {}
             self._cal_images = {}
             self._last_move_dir = None
             self._calibration_mode = 'auto_running'
+            
+            # Update button states - disable sequence during calibration
+            self._update_start_seq_state()
             
             # Start automatic calibration sequence
             self.after(100, self._auto_calibration_sequence)
@@ -2208,11 +2003,11 @@ class SpektrometerApp(CustomTk):
         try:
             if self._calibration_mode == 'auto_running':
                 # Step 1: Capture reference image
-                print("Krok 1: Zapisuję obraz referencyjny...")
+                print("Step 1: Saving reference image...")
                 self._cal_images['reference'] = self.pixelink_image_data.copy()
                 
                 # Step 2: Move X axis
-                print("Krok 2: Wykonuję ruch +X...")
+                print("Step 2: Performing +X movement...")
                 step_x = max(1, int(options.get('cal_step_x', 1)))
                 self.motor_controller.move('r', step_x)
                 self._calibration_mode = 'wait_x'
@@ -2221,14 +2016,14 @@ class SpektrometerApp(CustomTk):
                 
             elif self._calibration_mode == 'wait_x':
                 # Step 3: Capture image after X movement
-                print("Krok 3: Analizuję zmianę po ruchu X...")
+                print("Step 3: Analyzing change after X movement...")
                 self._cal_images['after_x'] = self.pixelink_image_data.copy()
                 
                 # Analyze X displacement
                 self._analyze_x_displacement()
                 
                 # Step 4: Move Y axis
-                print("Krok 4: Wykonuję ruch +Y...")
+                print("Step 4: Performing +Y movement...")
                 step_y = max(1, int(options.get('cal_step_y', 1)))
                 self.motor_controller.move('u', step_y)
                 self._calibration_mode = 'wait_y'
@@ -2237,7 +2032,7 @@ class SpektrometerApp(CustomTk):
                 
             elif self._calibration_mode == 'wait_y':
                 # Step 5: Capture image after Y movement and finalize
-                print("Krok 5: Analizuję zmianę po ruchu Y...")
+                print("Step 5: Analyzing change after Y movement...")
                 self._cal_images['after_y'] = self.pixelink_image_data.copy()
                 
                 # Analyze Y displacement
@@ -2278,9 +2073,9 @@ class SpektrometerApp(CustomTk):
             if abs(displacement_x) > 0.1:  # Minimum detectable movement
                 self.cal_px_per_step_x = abs(displacement_x) / steps
                 self.cal_sign_x = 1 if displacement_x > 0 else -1
-                print(f"X kalibracja: {displacement_x:.1f}px przesunięcie, {self.cal_px_per_step_x:.3f} px/step")
+                print(f"X calibration: {displacement_x:.1f}px displacement, {self.cal_px_per_step_x:.3f} px/step")
             else:
-                print("X: Nie wykryto przesunięcia obrazu")
+                print("X: No image displacement detected")
                 
         except Exception as e:
             print(f"X analysis error: {e}")
@@ -2311,15 +2106,15 @@ class SpektrometerApp(CustomTk):
             if abs(displacement_y) > 0.1:  # Minimum detectable movement
                 self.cal_px_per_step_y = abs(displacement_y) / steps
                 self.cal_sign_y = 1 if displacement_y > 0 else -1
-                print(f"Y kalibracja: {displacement_y:.1f}px przesunięcie, {self.cal_px_per_step_y:.3f} px/step")
+                print(f"Y calibration: {displacement_y:.1f}px displacement, {self.cal_px_per_step_y:.3f} px/step")
             else:
-                print("Y: Nie wykryto przesunięcia obrazu")
+                print("Y: No image displacement detected")
                 
         except Exception as e:
             print(f"Y analysis error: {e}")
     
     def _finalize_auto_calibration(self):
-        """Complete automatic calibration and enable ROI"""
+        """Complete automatic calibration"""
         try:
             # Update calibration displays
             if hasattr(self, 'cal_x_var'):
@@ -2331,46 +2126,23 @@ class SpektrometerApp(CustomTk):
             self.calibration = bool(self.cal_px_per_step_x > 0 and self.cal_px_per_step_y > 0)
             
             if self.calibration:
-                print("✓ Automatyczna kalibracja zakończona pomyślnie!")
-                print(f"X: {self.cal_px_per_step_x:.3f} px/step, znak: {self.cal_sign_x}")
-                print(f"Y: {self.cal_px_per_step_y:.3f} px/step, znak: {self.cal_sign_y}")
-                
-                # Enable ROI drawing
-                self.roi_enabled = True
-                print("✓ ROI selection enabled - you can now select scan area")
-                print("✓ Przejdź do zakładki 'Spectrum' i kliknij 'Select ROI' aby zaznaczyć obszar")
+                print("✓ Automatic calibration completed successfully!")
+                print(f"X: {self.cal_px_per_step_x:.3f} px/step, sign: {self.cal_sign_x}")
+                print(f"Y: {self.cal_px_per_step_y:.3f} px/step, sign: {self.cal_sign_y}")
+                print("✓ Ready to start measurement sequence")
                 
                 # Auto-save calibration
                 self.save_calibration()
                 
                 # Generate and store scan points for visualization
                 self.scan_points = self.generate_scan_points()
-                print(f"✓ Wygenerowano {len(self.scan_points)} punktów skanowania")
+                print(f"✓ Generated {len(self.scan_points)} scan points")
+                print("✓ Scanning will be performed on the entire image surface")
                 
-                # Auto-set a default ROI if none exists
-                if not hasattr(self, 'roi_coordinates') or not self.roi_coordinates:
-                    try:
-                        h, w = self.pixelink_image_data.shape[:2]
-                        # Set ROI to center quarter of image
-                        center_x, center_y = w//2, h//2
-                        roi_size = min(w, h) // 4
-                        x1 = center_x - roi_size//2
-                        y1 = center_y - roi_size//2
-                        x2 = center_x + roi_size//2
-                        y2 = center_y + roi_size//2
-                        self.roi_coordinates = (x1, y1, x2, y2)
-                        print(f"✓ Ustawiono domyślny ROI: {self.get_roi_bounds()}")
-                        print("✓ Możesz zmienić ROI klikając 'Select ROI' w zakładce Spectrum")
-                        
-                        # Regenerate scan points with new ROI
-                        self.scan_points = self.generate_scan_points()
-                    except Exception as e:
-                        print(f"Nie udało się ustawić domyślnego ROI: {e}")
             else:
-                print("BŁĄD: Kalibracja nie powiodła się - brak wykrytego ruchu obrazu")
+                print("ERROR: Calibration failed - no image movement detected")
             
             # Update UI states
-            self._update_roi_button_state()  # Add ROI button update
             self._update_start_seq_state()
             self._calibration_mode = None
             
@@ -2379,12 +2151,16 @@ class SpektrometerApp(CustomTk):
             self._calibration_mode = None
     
     def generate_scan_points(self):
-        """Generate scan points based on current ROI and step settings"""
-        if not hasattr(self, 'roi_coordinates') or not self.roi_coordinates:
-            return []
+        """Generate scan points based on full image and step settings"""
+        # Use full image dimensions
+        if hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
+            h, w = self.pixelink_image_data.shape[:2]
+            x, y = 0, 0  # Start from top-left corner
+        else:
+            # Default image size if no camera data
+            w, h = 640, 480
+            x, y = 0, 0
             
-        # Get ROI bounds and step settings
-        x, y, w, h = self.get_roi_bounds()
         step_x = self.step_x.get()
         step_y = self.step_y.get()
         
@@ -2402,70 +2178,9 @@ class SpektrometerApp(CustomTk):
                 pixel_y = y + (iy * step_y)
                 points.append((pixel_x, pixel_y))
         
-        print(f"🎯 Wygenerowano {len(points)} punktów skanowania ({nx}x{ny} siatka)")
+        print(f"🎯 Generated {len(points)} scan points ({nx}x{ny} grid)")
         return points
-    
-    def toggle_scan_points(self):
-        """Toggle scan points visualization - simplified for Tkinter"""
-        self.show_scan_points = not self.show_scan_points
-        print(f"✅ Punkty skanowania: {'WŁĄCZONE' if self.show_scan_points else 'WYŁĄCZONE'} (wizualizacja wyłączona dla wydajności)")
-    
-    def _update_scan_points_display(self):
-        """Update scan points display - disabled for Tkinter performance"""
-        print(f"✅ Punkty skanowania: {'WIDOCZNE' if self.show_scan_points else 'UKRYTE'} (wizualizacja wyłączona)")
-        pass
         
-    # Old guided calibration method - replaced by auto-calibration
-    # def _on_calibration_click_guided(self, event): ...
-
-    def _on_calibration_click(self, event, axis):
-        if event.inaxes != self.pixelink_ax:
-            return
-        if self._calibration_mode == f"{axis}_before":
-            self._calibration_points[f"{axis}_before"] = (event.xdata, event.ydata)
-            self._add_cal_marker(f"{axis}_before", event.xdata, event.ydata, 'yellow' if axis=='x' else 'orange', f"{axis.upper()}₁")
-            print(f"Kalibracja {axis.upper()} — zarejestrowano punkt 1 ({event.xdata:.1f}, {event.ydata:.1f}). Wykonaj jeden krok na osi {axis.upper()} i kliknij ten sam punkt.")
-            # Enable ROI after user completes first calibration click/move stage
-            self.roi_enabled = True
-            self._calibration_mode = f"{axis}_after"
-        elif self._calibration_mode == f"{axis}_after":
-            self._calibration_points[f"{axis}_after"] = (event.xdata, event.ydata)
-            self._add_cal_marker(f"{axis}_after", event.xdata, event.ydata, 'lime' if axis=='x' else 'cyan', f"{axis.upper()}₂")
-            p0 = self._calibration_points.get(f"{axis}_before")
-            p1 = self._calibration_points.get(f"{axis}_after")
-            if p0 and p1:
-                dx_raw = (p1[0] - p0[0])
-                dy_raw = (p1[1] - p0[1])
-                if axis == 'x':
-                    steps = max(1, int(options.get('cal_step_x', 1)))
-                    px_per_step = abs(dx_raw) / steps
-                    self.cal_px_per_step_x = px_per_step
-                    s_obs = 1 if dx_raw > 0 else (-1 if dx_raw < 0 else getattr(self, 'cal_sign_x', 1))
-                    dir_sign = 1 if getattr(self, '_last_move_dir', 'r') == 'r' else (-1 if getattr(self, '_last_move_dir', 'l') == 'l' else 1)
-                    self.cal_sign_x = s_obs * dir_sign
-                    if hasattr(self, 'cal_x_var'):
-                        self.cal_x_var.set(px_per_step)
-                    print(f"Kalibracja X zakończona. px/step={px_per_step:.3f}, sign={self.cal_sign_x}")
-                else:
-                    steps = max(1, int(options.get('cal_step_y', 1)))
-                    px_per_step = abs(dy_raw) / steps
-                    self.cal_px_per_step_y = px_per_step
-                    s_obs = 1 if dy_raw > 0 else (-1 if dy_raw < 0 else getattr(self, 'cal_sign_y', 1))
-                    dir_sign = 1 if getattr(self, '_last_move_dir', 'u') == 'u' else (-1 if getattr(self, '_last_move_dir', 'd') == 'd' else 1)
-                    self.cal_sign_y = s_obs * dir_sign
-                    if hasattr(self, 'cal_y_var'):
-                        self.cal_y_var.set(px_per_step)
-                    print(f"Kalibracja Y zakończona. px/step={px_per_step:.3f}, sign={self.cal_sign_y}")
-            # Set calibration true only if both axes have valid calibration
-            try:
-                self.calibration = bool(self.cal_px_per_step_x > 0 and self.cal_px_per_step_y > 0)
-                if self.calibration:
-                    print("Kalibracja na obu osiach zakończona. ROI odblokowane.")
-                    self._update_start_seq_state()
-            except Exception:
-                pass
-            self._calibration_mode = None
-
     def reset_calibration(self):
         self.cal_px_per_step_x = 0.0
         self.cal_px_per_step_y = 0.0
@@ -2485,8 +2200,8 @@ class SpektrometerApp(CustomTk):
                 except Exception:
                     pass
                 self._cal_markers.pop(k, None)
-            if hasattr(self, 'pixelink_canvas'):
-                self.pixelink_canvas.draw_idle()
+            # Canvas display was removed - skip drawing
+            pass
         except Exception:
             pass
         print("Reset kalibracji.")
@@ -2507,17 +2222,16 @@ class SpektrometerApp(CustomTk):
         except Exception:
             pass
         # Add new marker and label
-        pt = self.pixelink_ax.plot([x], [y], marker='o', color=color, markersize=6, linestyle='')[0]
-        lbl = self.pixelink_ax.text(x+5, y+5, label, color=color, fontsize=9)
-        self._cal_markers[key] = (pt, lbl)
+        # Canvas display was removed - skip marker display
+        print(f"Calibration marker {label} at ({x}, {y}) - display disabled")
         try:
-            self.pixelink_canvas.draw_idle()
+            pass  # Canvas drawing disabled
         except Exception:
             pass
     
     def load_measurements(self):
         """Load measurement files list without caching data"""
-        folder = "pomiar_dane"
+        folder = "measurement_data"
         self.measurement_files = []  # Store only filenames, not data
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -2543,20 +2257,20 @@ class SpektrometerApp(CustomTk):
                         spectrum = [float(v) for v in row[2:]]
                         data.append([x, y, spectrum])
                     except Exception as e:
-                        print(f"Pominięto wiersz z błędem: {row} ({e})")
+                        print(f"Skipped row with error: {row} ({e})")
         except Exception as e:
-            print(f"Błąd ładowania pliku {filename}: {e}")
+            print(f"Error loading file {filename}: {e}")
         return data
     
     def export_measurements(self):
         """Export all measurements to a single file"""
         if not self.measurement_files:
-            messagebox.showinfo("Info", "Brak pomiarów do eksportu")
+            messagebox.showinfo("Info", "No measurements to export")
             return
         
         # Ask for save location
         filename = filedialog.asksaveasfilename(
-            title="Eksportuj pomiary",
+            title="Export Measurements",
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
@@ -2576,28 +2290,28 @@ class SpektrometerApp(CustomTk):
                             x, y, spectrum = point
                             writer.writerow([measurement_id + 1, x, y] + spectrum)
                     
-                    print(f"Eksportowano {len(self.measurement_files)} pomiarów do {filename}")
-                    messagebox.showinfo("Sukces", f"Pomiary zostały wyeksportowane do:\n{filename}")
+                    print(f"Exported {len(self.measurement_files)} measurements to {filename}")
+                    messagebox.showinfo("Success", f"Measurements exported to:\n{filename}")
                     
             except Exception as e:
-                print(f"Błąd eksportu: {e}")
-                messagebox.showerror("Błąd", f"Nie można wyeksportować pomiarów:\n{e}")
+                print(f"Export error: {e}")
+                messagebox.showerror("Error", f"Cannot export measurements:\n{e}")
 
     def delete_all_measurements(self):
         """Delete all measurements"""
         if not self.measurement_files:
-            messagebox.showinfo("Info", "Brak pomiarów do usunięcia")
+            messagebox.showinfo("Info", "No measurements to delete")
             return
         
         result = messagebox.askyesno(
-            "Usuń wszystkie pomiary",
-            f"Czy na pewno chcesz usunąć wszystkie {len(self.measurement_files)} pomiarów?\n"
-            "Ta operacja jest nieodwracalna!"
+            "Delete All Measurements",
+            f"Are you sure you want to delete all {len(self.measurement_files)} measurements?\n"
+            "This action cannot be undone!"
         )
         
         if result:
             try:
-                folder = "pomiar_dane"
+                folder = "measurement_data"
                 deleted_count = 0
                 
                 # Delete all CSV files
@@ -2609,20 +2323,20 @@ class SpektrometerApp(CustomTk):
                 self.measurement_files.clear()  # Clear file list, not data cache
                 self.draw_measurements()
                 
-                print(f"Usunięto {deleted_count} plików pomiarów")
-                messagebox.showinfo("Sukces", f"Usunięto {deleted_count} pomiarów")
+                print(f"Deleted {deleted_count} measurement files")
+                messagebox.showinfo("Success", f"Deleted {deleted_count} measurements")
                 
             except Exception as e:
-                print(f"Błąd usuwania pomiarów: {e}")
-                messagebox.showerror("Błąd", f"Nie można usunąć pomiarów:\n{e}")
+                print(f"Error deleting measurements: {e}")
+                messagebox.showerror("Error", f"Cannot delete measurements:\n{e}")
 
     def delete_measurement(self, measurement_index):
         """Delete selected measurement"""
         if 0 <= measurement_index < len(self.measurement_files):
             result = messagebox.askyesno(
-                "Usuń pomiar",
-                f"Czy na pewno chcesz usunąć pomiar {measurement_index + 1}?\n"
-                "Ta operacja jest nieodwracalna!"
+                "Delete Measurement",
+                f"Are you sure you want to delete measurement {measurement_index + 1}?\n"
+                "This action cannot be undone!"
             )
             
             if result:
@@ -2630,15 +2344,15 @@ class SpektrometerApp(CustomTk):
                     # Delete the specific file
                     file_to_delete = self.measurement_files[measurement_index]
                     os.remove(file_to_delete)
-                    print(f"Usunięto plik: {os.path.basename(file_to_delete)}")
+                    print(f"Deleted file: {os.path.basename(file_to_delete)}")
                     
                     # Remove from file list and refresh
                     self.measurement_files.pop(measurement_index)
                     self.draw_measurements()
                     
                 except Exception as e:
-                    print(f"Błąd usuwania pomiaru: {e}")
-                    messagebox.showerror("Błąd", f"Nie można usunąć pomiaru:\n{e}")
+                    print(f"Error deleting measurement: {e}")
+                    messagebox.showerror("Error", f"Cannot delete measurement:\n{e}")
 
     def draw_measurements(self):
         """Draw measurement buttons in grid layout"""
@@ -2650,7 +2364,7 @@ class SpektrometerApp(CustomTk):
             # Show message if no measurements
             Label(
                 self.results_frame, 
-                text="Brak pomiarów\nUruchom sekwencję pomiarową aby utworzyć dane",
+                text="No measurements\nRun measurement sequence to create data",
                 bg=self.DGRAY, fg='lightgray', font=("Arial", 12),
                 justify=CENTER
             ).grid(row=0, column=0, padx=20, pady=20)
@@ -2712,119 +2426,6 @@ class SpektrometerApp(CustomTk):
             measurement_data = self._load_measurement_data_on_demand(filename)
             HeatMapWindow(self, measurement_index + 1, measurement_data, self.current_image)
 
-    def show_measurement(self, measurement):
-        """Show selected measurement in heatmap window (legacy method - deprecated)"""
-        print("Warning: show_measurement is deprecated, use show_measurement_by_index instead")
-
-    def update_loop(self):
-        """Ultra-lightweight GUI update loop - absolutely minimal operations"""
-        try:
-            # Only update spectrum plot if data changed (flag-based) and objects exist
-            if (hasattr(self, '_spectrum_needs_update') and 
-                self._spectrum_needs_update and 
-                hasattr(self, 'spectrum_ax')):
-                
-                self._update_spectrum_plot()
-                self._spectrum_needs_update = False
-
-        except Exception as e:
-            # Log errors but don't let them stop the loop
-            try:
-                print(f"Update loop error: {e}")
-            except:
-                pass
-
-        # Schedule next update - stable frequency
-        try:
-            self.after(50, self.update_loop)  # 20 FPS - stable and responsive
-        except:
-            pass  # Even scheduling errors shouldn't crash the app
-
-    def _resample_to_2048(self, y):
-        try:
-            if y is None:
-                return np.zeros(2048)
-            y = np.asarray(y).astype(float)
-            n = y.shape[0]
-            if n == 2048:
-                return y
-            x_src = np.linspace(0, 1, n)
-            x_dst = np.linspace(0, 1, 2048)
-            return np.interp(x_dst, x_src, y)
-        except Exception:
-            return np.zeros(2048)
-
-    def _update_camera_display(self, frame):
-        """Update camera display"""
-        try:
-            # Resize frame to fit canvas
-            cw, ch = self._camera_frame_size
-            frame_resized = cv2.resize(frame, (cw, ch))
-            frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(frame_rgb)
-            photo = ImageTk.PhotoImage(image)
-            # Draw on canvas
-            self._camera_canvas_img = photo
-            self.camera_canvas.delete('all')
-            self.camera_canvas.create_image(0, 0, anchor='nw', image=photo)
-            # Crosshair at center
-            cx, cy = cw // 2, ch // 2
-            self.camera_canvas.create_line(cx-20, cy, cx+20, cy, fill='gray')
-            self.camera_canvas.create_line(cx, cy-20, cx, cy+20, fill='gray')
-            # Re-draw selection rectangle if exists
-            if self.cam_scan_area_norm:
-                x0, y0, x1, y1 = self.cam_scan_area_norm
-                rx0, ry0 = int(x0 * cw), int(y0 * ch)
-                rx1, ry1 = int(x1 * cw), int(y1 * ch)
-                self.camera_canvas.create_rectangle(rx0, ry0, rx1, ry1, outline='cyan', width=2)
-            
-        except Exception as e:
-            print(f"Camera display error: {e}")
-
-    def _draw_camera_placeholder(self):
-        try:
-            cw, ch = self._camera_frame_size
-            self.camera_canvas.delete('all')
-            # Center crosshair
-            cx, cy = cw // 2, ch // 2
-            self.camera_canvas.create_rectangle(0, 0, cw, ch, outline=self.DGRAY, width=1)
-            self.camera_canvas.create_line(cx-20, cy, cx+20, cy, fill='gray')
-            self.camera_canvas.create_line(cx, cy-20, cx, cy+20, fill='gray')
-            self.camera_canvas.create_text(cw//2, 30, text="No camera. Select and Start.", fill='lightgray')
-        except Exception:
-            pass
-
-    def _cam_on_press(self, event):
-        self.cam_drag_start = (event.x, event.y)
-        if self.cam_drag_rect is not None:
-            self.camera_canvas.delete(self.cam_drag_rect)
-            self.cam_drag_rect = None
-
-    def _cam_on_drag(self, event):
-        if not self.cam_drag_start:
-            return
-        x0, y0 = self.cam_drag_start
-        x1, y1 = event.x, event.y
-        if self.cam_drag_rect is not None:
-            self.camera_canvas.coords(self.cam_drag_rect, x0, y0, x1, y1)
-        else:
-            self.cam_drag_rect = self.camera_canvas.create_rectangle(x0, y0, x1, y1, outline='cyan', width=2)
-
-    def _cam_on_release(self, event):
-        if not self.cam_drag_start:
-            return
-        x0, y0 = self.cam_drag_start
-        x1, y1 = event.x, event.y
-        self.cam_drag_start = None
-        # Normalize to 0..1
-        cw, ch = self._camera_frame_size
-        nx0 = max(0.0, min(1.0, min(x0, x1) / cw))
-        ny0 = max(0.0, min(1.0, min(y0, y1) / ch))
-        nx1 = max(0.0, min(1.0, max(x0, x1) / cw))
-        ny1 = max(0.0, min(1.0, max(y0, y1) / ch))
-        self.cam_scan_area_norm = (nx0, ny0, nx1, ny1)
-        self.cam_status.config(text=f"Scan area: ({nx0:.2f}, {ny0:.2f})–({nx1:.2f}, {ny1:.2f})")
-
     def move_motor(self, direction):
         """Manual motor movement function"""
         try:
@@ -2853,154 +2454,30 @@ class SpektrometerApp(CustomTk):
             self.motor_status.config(text=error_msg)
             print(f"❌ Motor movement error: {e}")
 
-    def _start_background_threads(self):
-        """Start background threads for non-blocking data processing"""
-        import threading
-        
-        # Thread for Pixelink data processing
-        if hasattr(self, 'spectrometer_manager') and self.spectrometer_manager:
-            threading.Thread(target=self._pixelink_data_worker, daemon=True).start()
-        
-        # Thread for camera data processing  
-        if hasattr(self, 'camera_manager') and self.camera_manager:
-            threading.Thread(target=self._camera_data_worker, daemon=True).start()
-
-    def _pixelink_data_worker(self):
-        """Background thread for processing Pixelink data - completely non-blocking"""
-        import time
-        while not getattr(self, '_stop_threads', True):
-            try:
-                # Wait for manager to be ready
-                if not hasattr(self, 'spectrometer_manager') or not self.spectrometer_manager:
-                    time.sleep(0.1)
-                    continue
-                    
-                if getattr(self.spectrometer_manager, 'running', False):
-                    # Absolutely non-blocking queue check
-                    try:
-                        image_data = self.spectrometer_manager.data_queue.get_nowait()
-                        if image_data is not None:
-                            # Process in background thread
-                            try:
-                                with self._data_lock:
-                                    self.pixelink_image_data = image_data['frame']
-                                    self.is_live_streaming = True
-                                    
-                                    # Calculate spectrum - check ROI size to prevent memory issues
-                                    x, y, w, h = self.get_roi_bounds()
-                                    
-                                    # Limit ROI size to prevent memory errors
-                                    max_roi_height = 500
-                                    max_roi_width = 2048
-                                    
-                                    # Clip ROI to image bounds and memory limits
-                                    img_h, img_w = self.pixelink_image_data.shape[:2]
-                                    x = max(0, min(x, img_w - 1))
-                                    y = max(0, min(y, img_h - 1))
-                                    w = min(w, max_roi_width, img_w - x)
-                                    h = min(h, max_roi_height, img_h - y)
-                                    
-                                    roi = self.pixelink_image_data[y:y+h, x:x+w]
-                                    if roi.size > 0 and roi.size < 1000000:  # Max 1M pixels
-                                        roi_mean = np.mean(roi, axis=0)
-                                        self.spectrum_data = self._resample_to_2048(roi_mean)
-                                        self._spectrum_needs_update = True
-                            except Exception as e:
-                                print(f"Pixelink data processing error: {e}")
-                                        
-                            # Update status (thread-safe, non-blocking)
-                            try:
-                                self.after_idle(lambda: self.pixelink_status.configure(
-                                    text="Spectrum calculation active\nLive data from Pixelink", fg='lightgreen'))
-                            except:
-                                pass
-                    except:
-                        pass  # Queue empty - completely normal
-                        
-                # Process static image data if available
-                elif hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
-                    try:
-                        with self._data_lock:
-                            # Same memory protection as above
-                            x, y, w, h = self.get_roi_bounds()
-                            
-                            # Limit ROI size to prevent memory errors
-                            max_roi_height = 500
-                            max_roi_width = 2048
-                            
-                            # Clip ROI to image bounds and memory limits
-                            img_h, img_w = self.pixelink_image_data.shape[:2]
-                            x = max(0, min(x, img_w - 1))
-                            y = max(0, min(y, img_h - 1))
-                            w = min(w, max_roi_width, img_w - x)
-                            h = min(h, max_roi_height, img_h - y)
-                            
-                            roi = self.pixelink_image_data[y:y+h, x:x+w]
-                            if roi.size > 0 and roi.size < 1000000:  # Max 1M pixels
-                                roi_mean = np.mean(roi, axis=0)
-                                self.spectrum_data = self._resample_to_2048(roi_mean)
-                                self._spectrum_needs_update = True
-                    except Exception as e:
-                        print(f"Static data processing error: {e}")
-                            
-            except Exception as e:
-                print(f"Pixelink worker error: {e}")
-                
-            time.sleep(0.1)  # Even slower - 10 FPS processing for stability
-
-    def _camera_data_worker(self):
-        """Background thread for processing camera data - completely non-blocking"""
-        import time
-        while not getattr(self, '_stop_threads', True):
-            try:
-                # Wait for manager to be ready
-                if not hasattr(self, 'camera_manager') or not self.camera_manager:
-                    time.sleep(0.1)
-                    continue
-                    
-                if getattr(self.camera_manager, 'running', False):
-                    # Process frame queue - absolutely non-blocking
-                    try:
-                        frame = self.camera_manager.frame_queue.get_nowait()
-                        if frame is not None:
-                            # Update UI from main thread - non-blocking
-                            try:
-                                self.after_idle(lambda f=frame: self._update_camera_display(f))
-                            except:
-                                pass  # Ignore UI update errors
-                    except:
-                        pass  # Queue empty - completely normal
-                        
-                    # Process direction queue - absolutely non-blocking
-                    try:
-                        direction = self.camera_manager.direction_queue.get_nowait()
-                        if direction:
-                            print(f"Movement detected: {direction}")
-                    except:
-                        pass  # Queue empty - completely normal
-                        
-            except Exception as e:
-                print(f"Camera worker error: {e}")
-                
-            time.sleep(0.1)  # Even slower - 10 FPS processing for stability
-
-    def cleanup(self):
-        """Cleanup resources when closing application"""
-        self._stop_threads = True
-        if hasattr(self, 'camera_manager'):
-            self.camera_manager.stop()
-        if hasattr(self, 'spectrometer_manager'):
-            self.spectrometer_manager.stop()
-        if hasattr(self, 'motor_controller'):
-            self.motor_controller.close()
+    # Duplicate cleanup removed; using unified cleanup above
 
 
 if __name__ == "__main__":
-    app = SpektrometerApp()
-    
     try:
+        print("=== URUCHAMIANIE APLIKACJI ===")
+        app = SpektrometerApp()
+        print("✅ Aplikacja utworzona")
+        
+        print("🚀 Starting main loop...")
         app.mainloop()
+        print("✅ Main loop completed")
+        
+    except Exception as e:
+        print(f"❌ APPLICATION ERROR: {e}")
+        import traceback
+        traceback.print_exc()
     except KeyboardInterrupt:
-        print("Application interrupted")
+        print("⚠️ Application interrupted by user")
     finally:
-        app.cleanup()
+        try:
+            if 'app' in locals():
+                print("🧹 Cleaning up resources...")
+                app.cleanup()
+                print("✅ Zasoby wyczyszczone")
+        except Exception as e:
+            print(f"❌ Error during cleanup: {e}")

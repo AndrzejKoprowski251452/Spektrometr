@@ -7,14 +7,14 @@
     "xmax": "1125",
     "port_x": "COM10",
     "port_y": "COM11",
-    "port_aux1": "",
-    "port_aux2": "",
-    "camera_index": 2,
+    "sequence_sleep": 0.5,
+    "camera_index": 0,
     "cal_px_per_step_x": 1024.0,
     "cal_px_per_step_y": 544.0,
     "cal_sign_x": -1,
     "cal_sign_y": -1,
-    "await": 0.01,
-    "cal_step_x": 1,
-    "cal_step_y": 1
+    "lambda_min": 400.0,
+    "lambda_max": 700.0,
+    "lambda_calibration_enabled": true,
+    "await": 0.01
 }
