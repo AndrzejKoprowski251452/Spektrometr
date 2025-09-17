@@ -42,7 +42,10 @@ except FileNotFoundError:
         'camera_index': 0,  # Try camera 0 by default
         'cal_px_per_step_x': 0.0, 'cal_px_per_step_y': 0.0,
         'cal_sign_x': 1, 'cal_sign_y': 1,
-        'cal_step_x': 1, 'cal_step_y': 1
+        'cal_step_x': 1, 'cal_step_y': 1,
+        # Camera settings
+        'exposure_time': 10.0,  # Exposure time in milliseconds
+        'gain': 1.0  # Camera gain multiplier
     }
 
 # Color constants
@@ -171,11 +174,10 @@ class SpectrometerManager:
         self.running = False
         self.thread = None
         
-        # Create buffer exactly like sample
-        MAX_WIDTH = 5000   # in pixels
-        MAX_HEIGHT = 5000  # in pixels
-        MAX_BYTES_PER_PIXEL = 3
-        self.frame_buffer = np.zeros([MAX_HEIGHT, MAX_WIDTH*MAX_BYTES_PER_PIXEL], dtype=np.uint8)
+        # Create buffer with reasonable size for PixeLink cameras
+        MAX_WIDTH = 2048   # in pixels - more reasonable for most PixeLink models  
+        MAX_HEIGHT = 2048  # in pixels - sufficient for most applications
+        self.frame_buffer = np.zeros([MAX_HEIGHT, MAX_WIDTH], dtype=np.uint8)
         
         print(f"✅ SpectrometerManager buffer created: {self.frame_buffer.shape}")
         
@@ -297,7 +299,9 @@ class SpectrometerManager:
                 ret = self.get_next_frame(1)
                 
                 if PxLApi.apiSuccess(ret[0]):
-                    self.frame_buffer = ret[1]
+                    # ret[1] is frameDescriptor, frame_buffer already contains image data
+                    frameDescriptor = ret[1]
+                    # Could use frameDescriptor.uFrameNumber, frameDescriptor.fFrameTime etc if needed
 
                 time.sleep(0.5)  # 500ms like sample
                 
@@ -313,6 +317,80 @@ class SpectrometerManager:
             print("✅ Streaming stopped")
         except Exception as e:
             print(f"❌ Stop streaming error: {e}")
+
+    def set_exposure(self, exposure_ms):
+        """Set camera exposure time in milliseconds"""
+        if not self.hCamera:
+            print("❌ Camera not initialized - cannot set exposure")
+            return False
+        
+        try:
+            # Convert milliseconds to seconds (PixeLink uses seconds)
+            exposure_seconds = exposure_ms / 1000.0
+            params = [exposure_seconds]
+            
+            ret = PxLApi.setFeature(self.hCamera, PxLApi.FeatureId.EXPOSURE, PxLApi.FeatureFlags.MANUAL, params)
+            if PxLApi.apiSuccess(ret[0]):
+                print(f"✅ Exposure set to {exposure_ms} ms")
+                return True
+            else:
+                print(f"❌ Failed to set exposure: {ret[0]}")
+                return False
+        except Exception as e:
+            print(f"❌ Exposure setting error: {e}")
+            return False
+    
+    def set_gain(self, gain_value):
+        """Set camera gain value"""
+        if not self.hCamera:
+            print("❌ Camera not initialized - cannot set gain")
+            return False
+        
+        try:
+            params = [float(gain_value)]
+            
+            ret = PxLApi.setFeature(self.hCamera, PxLApi.FeatureId.GAIN, PxLApi.FeatureFlags.MANUAL, params)
+            if PxLApi.apiSuccess(ret[0]):
+                print(f"✅ Gain set to {gain_value}")
+                return True
+            else:
+                print(f"❌ Failed to set gain: {ret[0]}")
+                return False
+        except Exception as e:
+            print(f"❌ Gain setting error: {e}")
+            return False
+
+    def get_exposure(self):
+        """Get current camera exposure time"""
+        if not self.hCamera:
+            return None
+        
+        try:
+            ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.EXPOSURE)
+            if PxLApi.apiSuccess(ret[0]):
+                # Convert seconds to milliseconds
+                exposure_ms = ret[2][0] * 1000.0
+                return exposure_ms
+            else:
+                return None
+        except Exception as e:
+            print(f"❌ Get exposure error: {e}")
+            return None
+
+    def get_gain(self):
+        """Get current camera gain"""
+        if not self.hCamera:
+            return None
+        
+        try:
+            ret = PxLApi.getFeature(self.hCamera, PxLApi.FeatureId.GAIN)
+            if PxLApi.apiSuccess(ret[0]):
+                return ret[2][0]
+            else:
+                return None
+        except Exception as e:
+            print(f"❌ Get gain error: {e}")
+            return None
 
 
 class MotorController:
@@ -797,6 +875,7 @@ class SpektrometerApp(CustomTk):
         self.measurement_files = []  # Store filenames only, not data
         self.current_image = None
         self.spectrum_data = np.zeros(2048)
+        self.pixelink_image_data = None  # Store current PixeLink frame
         self.cal_px_per_step_x = float(options.get('cal_px_per_step_x', 0.0))
         self.cal_px_per_step_y = float(options.get('cal_px_per_step_y', 0.0))
         self.cal_sign_x = int(options.get('cal_sign_x', 1))
@@ -806,8 +885,19 @@ class SpektrometerApp(CustomTk):
         self._sequence_running = False
         self._sequence_stop_requested = False
         
-        # Calibration state: always start as False, must be performed in current session
-        self.calibration = False
+        # Calibration state: check if valid calibration exists in options
+        self.calibration = bool(
+            self.cal_px_per_step_x > 0 and 
+            self.cal_px_per_step_y > 0 and
+            'cal_step_x' in options and 
+            'cal_step_y' in options
+        )
+        
+        if self.calibration:
+            print(f"✓ Valid calibration loaded from options.json")
+            print(f"X: {self.cal_px_per_step_x:.3f} px/step, Y: {self.cal_px_per_step_y:.3f} px/step")
+        else:
+            print("⚠ No valid calibration found - calibration required before sequence")
         
         # Default spectrum range variables
         self.xmin_var = StringVar(value=options.get('xmin', '0'))
@@ -995,9 +1085,11 @@ class SpektrometerApp(CustomTk):
         main_container = Frame(self.tab_spectrum_pixelink, bg=self.DGRAY)
         main_container.pack(fill=BOTH, expand=True, padx=5, pady=5)
         
-        # Top section - Image Preview (60% of space)
+        # Top section - Image Preview (major part of the tab - 60-70%)
         image_frame = Frame(main_container, bg=self.DGRAY)
-        image_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
+        image_frame.pack(fill=X, pady=(0, 8))
+        image_frame.pack_propagate(False)
+        image_frame.configure(height=650)  # Increased from 420 to 520 for 60-70% of tab
         
         # Image title and status
         image_header = Frame(image_frame, bg=self.DGRAY)
@@ -1013,28 +1105,115 @@ class SpektrometerApp(CustomTk):
         )
         self.pixelink_status.pack(side=RIGHT)
         
-        # Simple image display
-        self.spectrum_live_label = Label(
+        # Canvas for image display with better proportions
+        self.spectrum_image_canvas = Canvas(
             image_frame,
             bg='black',
-            text="Camera Preview\nInitializing...",
-            fg='white',
-            font=("Arial", 12),
-            justify=CENTER
+            highlightthickness=0
         )
-        self.spectrum_live_label.pack(fill=BOTH, expand=True, padx=5, pady=5)
+        self.spectrum_image_canvas.pack(fill=BOTH, expand=True, padx=5, pady=5)
         
-        # Bottom section - Spectrum Plot (40% of space) 
+        # Set larger canvas size for better image visibility (main focus)
+        self._spectrum_image_size = (2048,1088)  # Increased height from 350 to 450
+        self.spectrum_image_canvas.config(width=self._spectrum_image_size[0], height=self._spectrum_image_size[1])
+        self.spectrum_image_canvas_image = None  # Reference for image
+        
+        # Initial text on canvas
+        self.spectrum_image_canvas.create_text(
+            self._spectrum_image_size[0]//2, 
+            self._spectrum_image_size[1]//2,
+            text="Camera Preview\nInitializing...",
+            fill='white',
+            font=("Arial", 12),
+            tags="placeholder"
+        )
+        
+        # Camera Controls section (Compact between image and spectrum)
+        controls_frame = Frame(main_container, bg=self.DGRAY)
+        controls_frame.pack(fill=X, pady=(3, 8))  # Reduced padding
+        
+        # Title for controls
+        Label(controls_frame, text="Camera Controls", font=("Arial", 11, "bold"), 
+              bg=self.DGRAY, fg='white').pack(pady=(0, 5))  # Reduced font and padding
+        
+        # Controls container with two columns
+        controls_container = Frame(controls_frame, bg=self.DGRAY)
+        controls_container.pack(fill=X, padx=15)  # Reduced padding
+        
+        # Exposure control
+        exposure_frame = Frame(controls_container, bg=self.DGRAY)
+        exposure_frame.pack(side=LEFT, fill=X, expand=True, padx=(0, 10))  # Reduced padding
+        
+        Label(exposure_frame, text="Exposure Time (ms)", 
+              bg=self.DGRAY, fg='white', font=("Arial", 9)).pack(anchor=W)  # Smaller font
+        
+        self.exposure_var = DoubleVar(value=self.options.get('exposure_time', 10.0))
+        self.exposure_scale = Scale(
+            exposure_frame,
+            from_=0.1,
+            to=1000.0,
+            orient=HORIZONTAL,
+            variable=self.exposure_var,
+            resolution=0.1,
+            bg=self.DGRAY,
+            fg='white',
+            highlightbackground=self.DGRAY,
+            troughcolor='gray',
+            command=self._on_exposure_change
+        )
+        self.exposure_scale.pack(fill=X, pady=(2, 0))  # Reduced padding
+        
+        # Exposure value label
+        self.exposure_value_label = Label(
+            exposure_frame, 
+            text=f"{self.exposure_var.get():.1f} ms",
+            bg=self.DGRAY, fg='lightgray', font=("Arial", 8)  # Smaller font
+        )
+        self.exposure_value_label.pack(anchor=W)
+        
+        # Gain control
+        gain_frame = Frame(controls_container, bg=self.DGRAY)
+        gain_frame.pack(side=LEFT, fill=X, expand=True, padx=(10, 0))  # Reduced padding
+        
+        Label(gain_frame, text="Gain", 
+              bg=self.DGRAY, fg='white', font=("Arial", 9)).pack(anchor=W)  # Smaller font
+        
+        self.gain_var = DoubleVar(value=self.options.get('gain', 1.0))
+        self.gain_scale = Scale(
+            gain_frame,
+            from_=1.0,
+            to=10.0,
+            orient=HORIZONTAL,
+            variable=self.gain_var,
+            resolution=0.1,
+            bg=self.DGRAY,
+            fg='white',
+            highlightbackground=self.DGRAY,
+            troughcolor='gray',
+            command=self._on_gain_change
+        )
+        self.gain_scale.pack(fill=X, pady=(2, 0))  # Reduced padding
+        
+        # Gain value label
+        self.gain_value_label = Label(
+            gain_frame, 
+            text=f"{self.gain_var.get():.1f}",
+            bg=self.DGRAY, fg='lightgray', font=("Arial", 8)  # Smaller font
+        )
+        self.gain_value_label.pack(anchor=W)
+        
+        # Bottom section - Spectrum Plot (compact strip)
         spectrum_frame = Frame(main_container, bg=self.DGRAY)
-        spectrum_frame.pack(fill=X, pady=(5, 0))
+        spectrum_frame.pack(fill=BOTH, expand=True, pady=(0, 0))  # Use remaining space
         spectrum_frame.pack_propagate(False)
-        spectrum_frame.configure(height=200)
+        spectrum_frame.configure(height=180)  # Reduced from 300 to 180
         
-        # Create spectrum plot directly
-        self.spectrum_fig, self.spectrum_ax = plt.subplots(figsize=(10, 3), facecolor=self.DGRAY)
+        # Create compact spectrum plot
+        self.spectrum_fig, self.spectrum_ax = plt.subplots(figsize=(10, 2.8), facecolor=self.DGRAY)  # Reduced from 4.5 to 2.8
         self.spectrum_ax.set_facecolor(self.DGRAY)
         
-        self.x_axis = np.linspace(0, 2048, 2048)
+        # Initialize spectrum data and axes
+        self._update_spectrum_axes()  # Dynamic axis setup
         self.spectrum_data = np.zeros(2048)
         self.spectrum_line, = self.spectrum_ax.plot(self.x_axis, self.spectrum_data, color='green', linewidth=1)
         
@@ -1097,13 +1276,56 @@ class SpektrometerApp(CustomTk):
                     if frame is None or frame.size == 0:
                         return
                         
-                    # Create PIL image from buffer
-                    pil_image = Image.fromarray(frame.copy())
+                    # Get canvas dimensions
+                    canvas_w, canvas_h = self._spectrum_image_size
                     
-                    # Convert to PhotoImage
-                    photo = ImageTk.PhotoImage(pil_image)
-                    self.spectrum_live_label.configure(image=photo, text="")
-                    self.spectrum_live_label.image = photo
+                    # Resize frame to fit canvas while maintaining aspect ratio
+                    height, width = frame.shape[:2]
+                    
+                    # Determine scaling strategy
+                    aspect_ratio = width / height
+                    
+                    # If image is very wide (like a spectrum line), scale differently
+                    if aspect_ratio > 5:  # Very wide image - likely a spectrum line
+                        # For spectrum lines, use more height and less strict scaling
+                        new_w = min(canvas_w, width)
+                        new_h = min(canvas_h, max(height * 3, 100))  # Minimum height of 100px
+                        print(f"Spectrum line detected: {width}x{height} -> {new_w}x{new_h}")
+                    else:
+                        # Normal image scaling
+                        scale = min(canvas_w/width, canvas_h/height)
+                        new_w, new_h = int(width*scale), int(height*scale)
+                    
+                    if new_w > 0 and new_h > 0:
+                        # Use PIL for better quality resize
+                        pil_image = Image.fromarray(frame.copy())
+                        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        
+                        # Convert to PhotoImage
+                        photo = ImageTk.PhotoImage(pil_image)
+                        
+                        # Clear canvas and update image
+                        self.spectrum_image_canvas.delete("all")
+                        
+                        # Center image on canvas
+                        x_offset = (canvas_w - new_w) // 2
+                        y_offset = (canvas_h - new_h) // 2
+                        
+                        self.spectrum_image_canvas.create_image(
+                            x_offset, y_offset, 
+                            anchor='nw', 
+                            image=photo
+                        )
+                        
+                        # Keep reference to prevent garbage collection
+                        self.spectrum_image_canvas_image = photo
+                        
+                        # Store current frame data for other functions
+                        self.pixelink_image_data = frame.copy()
+                        
+                        # AUTOMATIC SPECTRUM CALCULATION - only if enabled
+                        if hasattr(self, 'auto_spectrum_var') and self.auto_spectrum_var.get():
+                            self._calculate_spectrum_from_frame(frame)
                     
                     # Update status
                     self.pixelink_status.configure(text="🟢 Live", fg='lightgreen')
@@ -1134,13 +1356,63 @@ class SpektrometerApp(CustomTk):
                             # Update spectrum display in main thread
                             self.after_idle(lambda f=frame_buffer: update_spectrum_display(f))
                     
-                    time.sleep(0.03)  # 30 FPS max for both sources
+                    time.sleep(0.1)  # 10 FPS max for better performance
                 except Exception as e:
                     print(f"Update thread error: {e}")
                     time.sleep(0.1)
         
         # Start unified thread
         threading.Thread(target=update_image, daemon=True).start()
+
+    def _on_exposure_change(self, value):
+        """Handle exposure slider change"""
+        try:
+            exposure_ms = float(value)
+            # Update label
+            self.exposure_value_label.configure(text=f"{exposure_ms:.1f} ms")
+            
+            # Apply to camera if available
+            if hasattr(self, 'spectrometer_manager') and self.spectrometer_manager:
+                print(f"🔧 Setting exposure to {exposure_ms} ms via PixeLink API...")
+                success = self.spectrometer_manager.set_exposure(exposure_ms)
+                if success:
+                    print(f"✅ Exposure successfully set to {exposure_ms} ms")
+                else:
+                    print(f"❌ Failed to set exposure to {exposure_ms} ms")
+            else:
+                print("⚠️ Spectrometer manager not available for exposure setting")
+            
+            # Save to options
+            self.options['exposure_time'] = exposure_ms
+            self.save_options()
+            
+        except Exception as e:
+            print(f"Error setting exposure: {e}")
+
+    def _on_gain_change(self, value):
+        """Handle gain slider change"""
+        try:
+            gain_value = float(value)
+            # Update label
+            self.gain_value_label.configure(text=f"{gain_value:.1f}")
+            
+            # Apply to camera if available
+            if hasattr(self, 'spectrometer_manager') and self.spectrometer_manager:
+                print(f"🔧 Setting gain to {gain_value} via PixeLink API...")
+                success = self.spectrometer_manager.set_gain(gain_value)
+                if success:
+                    print(f"✅ Gain successfully set to {gain_value}")
+                else:
+                    print(f"❌ Failed to set gain to {gain_value}")
+            else:
+                print("⚠️ Spectrometer manager not available for gain setting")
+            
+            # Save to options
+            self.options['gain'] = gain_value
+            self.save_options()
+            
+        except Exception as e:
+            print(f"Error setting gain: {e}")
 
     def _update_start_seq_state(self):
         try:
@@ -1286,11 +1558,17 @@ class SpektrometerApp(CustomTk):
         self.sequence_sleep_var = DoubleVar(value=options.get('sequence_sleep', 0.1))
         sequence_sleep_entry = Entry(settings_frame, textvariable=self.sequence_sleep_var, bg=self.MGRAY, fg='white')
         sequence_sleep_entry.grid(row=row_base+3, column=1, sticky=EW, pady=5)
+        
+        # Info about automatic timing
+        timing_info = Label(settings_frame, 
+                           text="Auto-adjusted based on camera exposure time", 
+                           bg=self.DGRAY, fg='lightgray', font=("Arial", 8))
+        timing_info.grid(row=row_base+4, column=0, columnspan=2, sticky=W, pady=2)
 
         CButton(settings_frame, text="Refresh Ports", command=self.refresh_ports).grid(row=row_base+1, column=2, rowspan=3, padx=10, sticky=N)
 
         # Camera settings
-        cam_row = row_base + 4
+        cam_row = row_base + 5  # Updated due to added timing info row
         Label(settings_frame, text="Camera Settings", font=("Arial", 14, "bold"), 
               bg=self.DGRAY, fg='white').grid(row=cam_row, column=0, columnspan=3, pady=10, sticky=W)
         
@@ -1342,13 +1620,34 @@ class SpektrometerApp(CustomTk):
         self.lambda_max_var = DoubleVar(value=options.get('lambda_max', 700.0))
         Entry(settings_frame, textvariable=self.lambda_max_var, bg=self.RGRAY, fg='white').grid(row=wave_row+3, column=1, sticky=EW, pady=5)
         
+        # Auto spectrum calculation settings
+        spectrum_row = wave_row + 4
+        Label(settings_frame, text="Spectrum Analysis", font=("Arial", 14, "bold"), 
+              bg=self.DGRAY, fg='white').grid(row=spectrum_row, column=0, columnspan=3, pady=10, sticky=W)
+        
+        # Auto spectrum calculation enable checkbox
+        self.auto_spectrum_var = BooleanVar(value=options.get('auto_spectrum_calculation', True))
+        auto_spectrum_check = Checkbutton(settings_frame, text="Auto Calculate Spectrum from Camera", 
+                                        variable=self.auto_spectrum_var,
+                                        command=self._on_auto_spectrum_changed,
+                                        bg=self.DGRAY, fg='white', selectcolor=self.RGRAY,
+                                        activebackground=self.DGRAY, activeforeground='lightgreen',
+                                        font=('Arial', 10))
+        auto_spectrum_check.grid(row=spectrum_row+1, column=0, columnspan=2, sticky=W, pady=5)
+        
+        # Auto spectrum info label
+        spectrum_info_text = "Automatically calculates spectrum from live camera feed\nby averaging image vertically to create horizontal profile"
+        Label(settings_frame, text=spectrum_info_text, font=("Arial", 9), 
+              bg=self.DGRAY, fg='lightgray', justify=LEFT).grid(
+              row=spectrum_row+2, column=0, columnspan=3, sticky=W, pady=5)
+        
         # Info label
         Label(settings_frame, text="Note: Wavelength calibration will override pixel scale in heatmaps", 
-              bg=self.DGRAY, fg='orange', font=("Arial", 9, "italic")).grid(row=wave_row+4, column=0, columnspan=3, sticky=W, pady=5)
+              bg=self.DGRAY, fg='orange', font=("Arial", 9, "italic")).grid(row=spectrum_row+3, column=0, columnspan=3, sticky=W, pady=5)
 
         # Apply button - make it more prominent
         apply_frame = Frame(settings_frame, bg=self.DGRAY)
-        apply_frame.grid(row=wave_row+6, column=0, columnspan=3, pady=20)
+        apply_frame.grid(row=spectrum_row+5, column=0, columnspan=3, pady=20)
         
         CButton(apply_frame, text="SAVE SETTINGS", command=self.apply_settings, 
                font=("Arial", 12, "bold"), fg='yellow').pack(pady=5)
@@ -1380,9 +1679,31 @@ class SpektrometerApp(CustomTk):
             options['cal_step_y'] = int(options.get('cal_step_y', 1))
             with open('options.json', 'w') as f:
                 json.dump(options, f, indent=4)
+            
+            # Set calibration flag based on saved values
+            self.calibration = bool(self.cal_px_per_step_x > 0 and self.cal_px_per_step_y > 0)
+            
             print(f"Calibration saved: X={self.cal_px_per_step_x:.4f}, Y={self.cal_px_per_step_y:.4f}")
+            if self.calibration:
+                print("✓ Calibration flag set - sequence ready to start!")
         except Exception as e:
             print(f"Calibration save error: {e}")
+
+    def _on_auto_spectrum_changed(self):
+        """Handle auto spectrum calculation checkbox change"""
+        self.save_options()
+
+    def save_options(self):
+        """Save current options to JSON file"""
+        try:
+            # Update options with current UI values
+            self.options['auto_spectrum_calculation'] = self.auto_spectrum_var.get()
+            
+            with open('options.json', 'w') as f:
+                json.dump(self.options, f, indent=4)
+            print(f"✅ Options saved to options.json")
+        except Exception as e:
+            print(f"❌ Error saving options: {e}")
 
     def _setup_styles(self):
         """Setup ttk styles"""
@@ -1456,6 +1777,8 @@ class SpektrometerApp(CustomTk):
             if self.spectrometer_manager.initialize():
                 self.spectrometer_manager.start()
                 self.after_idle(lambda: print("Spectrometer initialized successfully"))
+                # Sync sliders with camera values after successful initialization
+                self.after_idle(self._sync_camera_controls)
             else:
                 self.after_idle(lambda: print("Spectrometer initialization failed"))
                 # Do not auto-load any test image; require real camera frames
@@ -1472,6 +1795,37 @@ class SpektrometerApp(CustomTk):
             
         except Exception as e:
             self.after_idle(lambda: print(f"❌ Background initialization error: {e}"))
+
+    def _sync_camera_controls(self):
+        """Sync camera control sliders with actual camera values"""
+        try:
+            if hasattr(self, 'spectrometer_manager') and self.spectrometer_manager and self.spectrometer_manager.hCamera:
+                print("🔄 Syncing camera controls with PixeLink values...")
+                
+                # Get current exposure from camera
+                current_exposure = self.spectrometer_manager.get_exposure()
+                if current_exposure is not None:
+                    exposure_ms = current_exposure * 1000  # Convert to ms
+                    if hasattr(self, 'exposure_var'):
+                        self.exposure_var.set(exposure_ms)
+                        if hasattr(self, 'exposure_value_label'):
+                            self.exposure_value_label.configure(text=f"{exposure_ms:.1f} ms")
+                        print(f"✅ Exposure slider synced: {exposure_ms:.1f} ms")
+                
+                # Get current gain from camera
+                current_gain = self.spectrometer_manager.get_gain()
+                if current_gain is not None:
+                    if hasattr(self, 'gain_var'):
+                        self.gain_var.set(current_gain)
+                        if hasattr(self, 'gain_value_label'):
+                            self.gain_value_label.configure(text=f"{current_gain:.1f}")
+                        print(f"✅ Gain slider synced: {current_gain:.1f}")
+                        
+            else:
+                print("⚠️ Cannot sync controls - camera not initialized")
+                
+        except Exception as e:
+            print(f"❌ Error syncing camera controls: {e}")
 
     def _auto_init_pixelink(self):
         """Auto-initialize PixeLink camera without user interaction"""
@@ -1537,6 +1891,72 @@ class SpektrometerApp(CustomTk):
 
     # REMOVED: Spectrum control functions - not used in simple view
 
+    def _calculate_spectrum_from_frame(self, frame):
+        """Automatically calculate spectrum from current PixeLink frame"""
+        try:
+            if frame is None or frame.size == 0:
+                return
+                
+            # Convert frame to 2D if needed
+            if len(frame.shape) == 3:
+                # If color image, convert to grayscale
+                frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.shape[2] == 3 else frame[:,:,0]
+            else:
+                frame_gray = frame
+                
+            height, width = frame_gray.shape
+            
+            # Calculate spectrum by averaging vertically (sum along Y-axis)
+            # This creates a horizontal profile which is typical for spectrometers
+            spectrum_profile = np.mean(frame_gray, axis=0)  # Average along Y-axis
+            
+            # Resample to match our spectrum plot resolution (2048 points)
+            if len(spectrum_profile) != 2048:
+                # Interpolate to 2048 points
+                x_old = np.linspace(0, 1, len(spectrum_profile))
+                x_new = np.linspace(0, 1, 2048)
+                spectrum_profile = np.interp(x_new, x_old, spectrum_profile)
+            
+            # Update spectrum data
+            self.spectrum_data = spectrum_profile
+            
+            # Update the spectrum plot in main thread
+            self.after_idle(self._update_spectrum_plot)
+                
+        except Exception as e:
+            print(f"❌ Spectrum calculation error: {e}")
+
+    def _update_spectrum_axes(self):
+        """Update spectrum axes based on calibration settings"""
+        try:
+            # Check if wavelength calibration is enabled
+            if (hasattr(self, 'options') and 
+                self.options.get('lambda_calibration_enabled', False) and
+                'lambda_min' in self.options and 'lambda_max' in self.options):
+                
+                lambda_min = float(self.options['lambda_min'])
+                lambda_max = float(self.options['lambda_max'])
+                
+                # Create wavelength axis
+                self.x_axis = np.linspace(lambda_min, lambda_max, 2048)
+                xlabel = "Wavelength (nm)"
+                title = f"Spectrum ({lambda_min:.0f}-{lambda_max:.0f} nm)"
+            else:
+                # Use pixel axis
+                self.x_axis = np.linspace(0, 2048, 2048)
+                xlabel = "Pixel"
+                title = "Spectrum"
+            
+            # Update axis labels if spectrum_ax exists
+            if hasattr(self, 'spectrum_ax'):
+                self.spectrum_ax.set_xlabel(xlabel, color='white', fontsize=10)
+                self.spectrum_ax.set_title(title, color='white', fontsize=12)
+                
+        except Exception as e:
+            print(f"❌ Spectrum axes update error: {e}")
+            # Fallback to pixel axis
+            self.x_axis = np.linspace(0, 2048, 2048)
+
     def _update_spectrum_plot(self):
         """Update spectrum plot with enhanced features - completely non-blocking"""
         try:
@@ -1545,25 +1965,30 @@ class SpektrometerApp(CustomTk):
                 
             # Update main spectrum line
             if hasattr(self, 'spectrum_line'):
+                # Update x-axis data in case calibration changed
+                self.spectrum_line.set_xdata(self.x_axis)
                 self.spectrum_line.set_ydata(self.spectrum_data)
                 
-                # Auto-adjust Y axis if not manually zoomed
+                # Auto-adjust both X and Y axes
                 current_ylim = self.spectrum_ax.get_ylim()
-                current_xlim = self.spectrum_ax.get_xlim()
                 
-                # Check if we need to update Y scale
+                # Update X axis to show full spectrum range
+                if hasattr(self, 'x_axis') and len(self.x_axis) > 0:
+                    self.spectrum_ax.set_xlim(self.x_axis[0], self.x_axis[-1])
+                
+                # Auto-scale Y axis for better visibility
                 data_max = np.max(self.spectrum_data)
                 data_min = np.min(self.spectrum_data)
                 
-                # Only auto-scale if the current view shows the full range
-                if (current_xlim[0] <= 0 and current_xlim[1] >= len(self.spectrum_data) - 1):
-                    if data_max > current_ylim[1] * 0.9 or data_max < current_ylim[1] * 0.5:
-                        # Prevent identical ylim values which cause matplotlib warnings
-                        if abs(data_max - data_min) < 1e-10:  # Values are essentially the same
-                            y_center = data_min if data_min != 0 else 1
-                            self.spectrum_ax.set_ylim(y_center - abs(y_center) * 0.1, y_center + abs(y_center) * 0.1)
-                        else:
-                            self.spectrum_ax.set_ylim(data_min * 0.9, data_max * 1.1)
+                # Only auto-scale Y if data range is meaningful
+                if data_max > data_min:
+                    # Add some padding for better visualization
+                    y_range = data_max - data_min
+                    y_padding = y_range * 0.1
+                    self.spectrum_ax.set_ylim(data_min - y_padding, data_max + y_padding)
+                elif data_max > 0:
+                    # Handle case where all values are similar but non-zero
+                    self.spectrum_ax.set_ylim(0, data_max * 1.2)
                 
                 # Safe canvas update in main thread - inline
                 def safe_canvas_update():
@@ -1680,7 +2105,6 @@ class SpektrometerApp(CustomTk):
                     self.stop_seq_btn.config(state=NORMAL)
                 
                 print("🚀 STARTING MEASUREMENT SEQUENCE...")
-                print(f"Kalibracja: {getattr(self, 'calibration', False)}")
                 
                 # Guards: require calibration
                 if not getattr(self, 'calibration', False):
@@ -1734,18 +2158,13 @@ class SpektrometerApp(CustomTk):
                 print(f"🎯 Scan points: {nx} x {ny} = {total_points} points")
                 
                 # Initialize progress tracking
-                current_point = 0
                 start_time = time.time()
                 
                 with open(filename, "w", newline="") as f:
                     writer = csv.writer(f)
                     
-                    # Write header
-                    count = len(self.spectrum_data)
-                    writer.writerow(['measurement_id', 'x_pixel', 'y_pixel', 'x_motor', 'y_motor'] + 
-                                  [f'wavelength_{i}' for i in range(count)])
-                    
-                    print("🏁 Starting square scan from corner...")
+                    # NO HEADER - format compatible with existing measurements
+                    # Format: x_pixel, y_pixel, spectrum_value_0, spectrum_value_1, ...
                     
                     # Use settings from options.json for scanning area
                     scan_step_x = self.step_x.get()
@@ -1753,23 +2172,14 @@ class SpektrometerApp(CustomTk):
                     scan_width = self.scan_width.get()
                     scan_height = self.scan_height.get()
                     
-                    print(f"📋 Scan parameters from settings:")
-                    print(f"   Krok X: {scan_step_x}, Krok Y: {scan_step_y}")
-                    print(f"   Width: {scan_width}, Height: {scan_height}")
-                    
                     # Calculate number of points in each direction
                     points_x = scan_width // scan_step_x + 1
                     points_y = scan_height // scan_step_y + 1
                     total_points = points_x * points_y
                     
-                    print(f"📐 Scan grid: {points_x} x {points_y} = {total_points} points")
-                    
                     # Calculate offset to move to top-left corner of scan area
-                    # From current position, move to corner where scanning will start
                     offset_x = -scan_width // 2
                     offset_y = -scan_height // 2
-                    
-                    print(f"📍 Move to corner from current position: ({offset_x}, {offset_y})")
                     
                     # Move to top-left corner of scan area
                     if offset_x != 0:
@@ -1780,23 +2190,17 @@ class SpektrometerApp(CustomTk):
                         self.motor_controller.move(dir_y, abs(offset_y))
                     
                     time.sleep(1)
-                    print("✅ At corner - ready to scan")
-                    
                     current_point = 0
                     
                     # Main scanning loop - square grid from corner
                     for iy in range(points_y):
                         # Check for stop request
                         if self._sequence_stop_requested:
-                            print("🛑 Sequence stopped by user")
                             break
                             
-                        print(f"📍 Scanning row {iy + 1}/{points_y}")
-                        
                         for ix in range(points_x):
                             # Check for stop request
                             if self._sequence_stop_requested:
-                                print("🛑 Sequence stopped by user")
                                 break
                                 
                             current_point += 1
@@ -1804,8 +2208,6 @@ class SpektrometerApp(CustomTk):
                             # Calculate absolute position in grid (starting from 0,0 at corner)
                             grid_x = ix * scan_step_x
                             grid_y = iy * scan_step_y
-                            
-                            print(f"➡️ Punkt {current_point}: siatka ({grid_x}, {grid_y})")
                             
                             # Move to grid position (only if not the first point)
                             if current_point > 1:
@@ -1820,15 +2222,34 @@ class SpektrometerApp(CustomTk):
                             # Wait for motor to stabilize
                             time.sleep(0.01)
                             
-                            # Acquire spectrum data
-                            spectrum = self.spectrum_data.copy()
-                            xmin = int(self.xmin_var.get())
-                            xmax = int(self.xmax_var.get())
-                            spectrum_roi = spectrum[xmin:xmax]
+                            # Acquire fresh spectrum data from current camera frame
+                            if hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
+                                # Calculate spectrum from current frame
+                                frame = self.pixelink_image_data
+                                if len(frame.shape) == 3:  # Color image
+                                    frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                                else:
+                                    frame_gray = frame
+                                
+                                # Calculate spectrum by averaging vertically (horizontal profile)
+                                spectrum_profile = np.mean(frame_gray, axis=0)
+                                
+                                # Resample to 2048 points if needed
+                                if len(spectrum_profile) != 2048:
+                                    x_old = np.linspace(0, 1, len(spectrum_profile))
+                                    x_new = np.linspace(0, 1, 2048)
+                                    spectrum_profile = np.interp(x_new, x_old, spectrum_profile)
+                                
+                                spectrum = spectrum_profile
+                            else:
+                                # Fallback to stored spectrum data
+                                spectrum = self.spectrum_data.copy()
                             
-                            # Save measurement data with grid coordinates
-                            writer.writerow([current_point, grid_x, grid_y, grid_x, grid_y] + 
-                                          spectrum_roi.tolist())
+                            # For sequence measurements, save FULL spectrum (all 2048 points)
+                            # Don't use ROI settings - save complete spectrum data
+                            
+                            # Save measurement data with grid coordinates (x_pixel, y_pixel, spectrum_values)
+                            writer.writerow([grid_x, grid_y] + spectrum.tolist())
                             
                             # Progress update
                             elapsed = time.time() - start_time
@@ -1838,9 +2259,25 @@ class SpektrometerApp(CustomTk):
                             print(f"📊 Punkt {current_point}/{total_points} ({progress:.1f}%) - "
                                   f"Siatka: ({grid_x}, {grid_y}) - ETA: {eta:.0f}s")
                             
-                            # Configurable delay for sequence measurements
-                            sequence_sleep = options.get('sequence_sleep', 0.1)
-                            time.sleep(sequence_sleep)
+                            # Smart delay based on camera frame rate and exposure time
+                            # Get current exposure time from UI or options
+                            if hasattr(self, 'exposure_var'):
+                                exposure_time_ms = float(self.exposure_var.get())
+                            else:
+                                exposure_time_ms = float(self.options.get('exposure_time', 10.0))
+                            
+                            exposure_time_s = exposure_time_ms / 1000.0  # Convert ms to seconds
+                            
+                            # Frame rate is limited by exposure time + readout time
+                            # Add buffer for camera processing and readout (typically ~50-100ms)
+                            min_frame_time = exposure_time_s + 0.1  # exposure + 100ms buffer
+                            
+                            # Use configured sequence_sleep but ensure it's not less than frame time
+                            configured_sleep = float(self.options.get('sequence_sleep', 0.5))
+                            actual_sleep = max(configured_sleep, min_frame_time)
+                            
+                            print(f"🕒 Wait: {actual_sleep:.2f}s (exposure: {exposure_time_ms}ms + buffer)")
+                            time.sleep(actual_sleep)
                 
                 # Return to original position (before scan started)
                 print("🔙 Returning to position before scan...")
@@ -2280,15 +2717,15 @@ class SpektrometerApp(CustomTk):
                 with open(filename, 'w', newline='') as f:
                     writer = csv.writer(f)
                     
-                    # Write header
-                    writer.writerow(['measurement_id', 'x', 'y'] + [f'wavelength_{i}' for i in range(2048)])
+                    # NO HEADER - compatible format: x_pixel, y_pixel, spectrum_values
+                    # writer.writerow(['measurement_id', 'x', 'y'] + [f'wavelength_{i}' for i in range(2048)])
                     
                     # Write all measurements - load on demand
                     for measurement_id, measurement_file in enumerate(self.measurement_files):
                         measurement_data = self._load_measurement_data_on_demand(measurement_file)
                         for point in measurement_data:
                             x, y, spectrum = point
-                            writer.writerow([measurement_id + 1, x, y] + spectrum)
+                            writer.writerow([x, y] + spectrum)
                     
                     print(f"Exported {len(self.measurement_files)} measurements to {filename}")
                     messagebox.showinfo("Success", f"Measurements exported to:\n{filename}")
