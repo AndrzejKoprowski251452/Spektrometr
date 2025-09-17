@@ -24,7 +24,7 @@ if not exist "requirements.txt" (
 )
 
 echo.
-echo Installing Python packages...
+echo Installing Python packages from requirements.txt...
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
@@ -46,7 +46,7 @@ echo Setup completed successfully!
 echo ================================================
 echo.
 echo To run the application:
-echo   python "index copy.py"
+echo   python index.py
 echo.
 echo Or double-click on: run_spektrometr.bat
 echo.

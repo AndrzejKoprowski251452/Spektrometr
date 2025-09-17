@@ -1,6 +1,7 @@
 @echo off
-title Python Spektrometr
-echo Starting Python Spektrometr...
+echo ================================================
+echo Python Spektrometr - Starting Application
+echo ================================================
 
 REM Check if Python is available
 python --version >nul 2>&1
@@ -12,7 +13,7 @@ if errorlevel 1 (
 )
 
 REM Check if main file exists
-if not exist "index copy.py" (
+if not exist "index.py" (
     echo ERROR: Application file not found!
     echo Make sure you're in the correct directory
     pause
@@ -20,10 +21,8 @@ if not exist "index copy.py" (
 )
 
 REM Run the application
-echo ================================================
-echo Python Spektrometr - Starting Application
-echo ================================================
-python "index copy.py"
+echo Starting Python Spektrometr...
+python index.py
 
 REM Keep window open if there was an error
 if errorlevel 1 (

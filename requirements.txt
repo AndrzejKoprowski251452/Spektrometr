@@ -1,11 +1,11 @@
 # Python Spektrometr - Dependencies
 # Core scientific computing
-numpy>=1.20.0
+numpy>=1.20.0,<2.0.0
 matplotlib>=3.5.0
 opencv-python>=4.5.0
 
 # GUI and Image Processing
-Pillow>=8.0.0
+Pillow>=8.0.0,<10.0.0
 # tkinter - included with Python standard library
 
 # Serial Communication

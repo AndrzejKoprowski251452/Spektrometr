@@ -18,12 +18,16 @@ cd Spektrometr
 
 ### 2. Uruchom automatyczną instalację
 ```bash
-python setup.py
+install.bat
+```
+lub
+```bash
+python -m pip install -r requirements.txt
 ```
 
 ### 3. Uruchom aplikację
 ```bash
-python "index copy.py"
+python index.py
 ```
 
 ## Ręczna instalacja
@@ -68,10 +72,12 @@ Edytuj `options.json`:
 
 ```
 Spektrometr/
-├── index copy.py          # Główna aplikacja
+├── index.py             # Główna aplikacja
 ├── addons.py             # Dodatkowe funkcje
+├── compatibility_fix.py  # Poprawki kompatybilności
 ├── options.json          # Konfiguracja
-├── requirements.txt      # Zależności Python
+├── requirements.txt      # Zależności Python (najnowsze)
+├── requirements_stable.txt # Zależności (kompatybilne)
 ├── setup.py             # Skrypt instalacyjny
 ├── README.md            # Ta instrukcja
 ├── measurement_data/    # Zapisane pomiary
@@ -98,6 +104,28 @@ Spektrometr/
 
 ## Rozwiązywanie problemów
 
+### Błąd PhotoImage "_PhotoImage_photo"
+```
+AttributeError: 'PhotoImage' object has no attribute '_PhotoImage_photo'
+```
+**Rozwiązanie**: Problem z kompatybilnością Pillow
+```bash
+pip install "Pillow<10.0.0"
+# lub
+pip install Pillow==9.5.0
+```
+
+### Błędy NumPy 2.0+
+```
+AttributeError: module 'numpy' has no attribute 'xyz'
+```
+**Rozwiązanie**: Użyj starszej wersji NumPy
+```bash
+pip install "numpy<2.0.0"
+# lub
+pip install numpy==1.24.3
+```
+
 ### Brak PixeLink SDK
 ```
 ⚠️ PixeLink SDK not found - camera features will be limited
@@ -120,6 +148,17 @@ ModuleNotFoundError: No module named 'xyz'
 **Rozwiązanie**:
 ```bash
 pip install --upgrade -r requirements.txt
+```
+
+### Problemy z virtual environment
+```bash
+# Usuń stary environment
+rmdir /s spektrometr_env
+
+# Utwórz nowy
+python -m venv spektrometr_env
+spektrometr_env\Scripts\activate.bat
+pip install -r requirements.txt
 ```
 
 ## Użycie
