@@ -8,7 +8,7 @@
     "port_x": "COM10",
     "port_y": "COM11",
     "sequence_sleep": 0.5,
-    "camera_index": 2,
+    "camera_index": 1,
     "cal_px_per_step_x": 1024.0,
     "cal_px_per_step_y": 1024.0,
     "cal_sign_x": -1,
@@ -17,8 +17,7 @@
     "lambda_max": 700.0,
     "lambda_calibration_enabled": true,
     "await": 0.01,
-    "cal_step_x": 1,
-    "cal_step_y": 1,
-    "exposure_time": 1000.0,
-    "auto_spectrum_calculation": true
+    "gain": 1.0,
+    "auto_spectrum_calculation": true,
+    "exposure_time": 1000.0
 }

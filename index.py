@@ -34,15 +34,12 @@ try:
         options = json.load(f)
 except FileNotFoundError:
     options = {
-        'step_x': 10, 'step_y': 10, 'offset': 5,
-        'width': 100, 'height': 100, 'await': 0.01,
+        'step_x': 20, 'step_y': 20, 'offset': 10,  # Values in micrometers (1 pulse = 2 μm)
+        'width': 200, 'height': 200, 'await': 0.01,  # Width/height in micrometers
         'sequence_sleep': 0.1,  # Sleep time during sequence measurements
         'xmin': '0', 'xmax': '2048',
         'port_x': 'COM5', 'port_y': 'COM9',
         'camera_index': 0,  # Try camera 0 by default
-        'cal_px_per_step_x': 0.0, 'cal_px_per_step_y': 0.0,
-        'cal_sign_x': 1, 'cal_sign_y': 1,
-        'cal_step_x': 1, 'cal_step_y': 1,
         # Camera settings
         'exposure_time': 10.0,  # Exposure time in milliseconds
         'gain': 1.0  # Camera gain multiplier
@@ -199,6 +196,9 @@ class SpectrometerManager:
             return True
                 
         except Exception as e:
+            PxLApi.loadSettings(self.hCamera, PxLApi.Settings.SETTINGS_FACTORY)
+            time.sleep(0.1)
+            self.initialize()
             print(f"❌ Pixelink initialization error: {e}")
             print("🔄 Loading test image instead...")
             self._load_test_image()
@@ -400,6 +400,8 @@ class MotorController:
         self.ports = []
         self.connected = False
         self.executor = ThreadPoolExecutor(max_workers=2)
+        # Motor resolution: 1 pulse = 2 micrometers
+        self.MICROMETERS_PER_PULSE = 2
         
         try:
             if self._check_ports(port_x, port_y):
@@ -409,35 +411,41 @@ class MotorController:
         except Exception as e:
             print(f"Motor connection error: {e}")
     
+    def micrometers_to_pulses(self, micrometers):
+        """Convert micrometers to motor pulses (1 pulse = 2 μm)"""
+        return max(1, int(micrometers / self.MICROMETERS_PER_PULSE))
+    
     def _check_ports(self, port_x, port_y):
         """Check if ports are available"""
         available_ports = [p.device for p in serial.tools.list_ports.comports()]
         return port_x in available_ports and port_y in available_ports
     
     def move(self, direction, step=None):
-        """Move motors asynchronously"""
+        """Move motors asynchronously - step parameter is in micrometers"""
         if not self.connected:
             return
             
         if step is None:
-            step_x = options['step_x']
-            step_y = options['step_y']
+            # Convert micrometers to pulses for default steps
+            step_x_pulses = self.micrometers_to_pulses(options['step_x'])
+            step_y_pulses = self.micrometers_to_pulses(options['step_y'])
         else:
-            step_x = step_y = step
+            # Convert provided step (in micrometers) to pulses
+            step_x_pulses = step_y_pulses = self.micrometers_to_pulses(step)
             
         def _move():
             try:
                 if direction == 'r':
-                    self.ports[0].write(f"M:1+P{step_x}\r\n".encode())
+                    self.ports[0].write(f"M:1+P{step_x_pulses}\r\n".encode())
                     self.ports[0].write('G:\r\n'.encode())
                 elif direction == 'l':
-                    self.ports[0].write(f"M:1-P{step_x}\r\n".encode())
+                    self.ports[0].write(f"M:1-P{step_x_pulses}\r\n".encode())
                     self.ports[0].write('G:\r\n'.encode())
                 elif direction == 'u':
-                    self.ports[1].write(f"M:1+P{step_y}\r\n".encode())
+                    self.ports[1].write(f"M:1+P{step_y_pulses}\r\n".encode())
                     self.ports[1].write('G:\r\n'.encode())
                 elif direction == 'd':
-                    self.ports[1].write(f"M:1-P{step_y}\r\n".encode())
+                    self.ports[1].write(f"M:1-P{step_y_pulses}\r\n".encode())
                     self.ports[1].write('G:\r\n'.encode())
                 elif direction == 'o':
                     self.ports[0].write("H:1\r\n".encode())
@@ -876,28 +884,10 @@ class SpektrometerApp(CustomTk):
         self.current_image = None
         self.spectrum_data = np.zeros(2048)
         self.pixelink_image_data = None  # Store current PixeLink frame
-        self.cal_px_per_step_x = float(options.get('cal_px_per_step_x', 0.0))
-        self.cal_px_per_step_y = float(options.get('cal_px_per_step_y', 0.0))
-        self.cal_sign_x = int(options.get('cal_sign_x', 1))
-        self.cal_sign_y = int(options.get('cal_sign_y', 1))
         
         # Sequence control flags
         self._sequence_running = False
         self._sequence_stop_requested = False
-        
-        # Calibration state: check if valid calibration exists in options
-        self.calibration = bool(
-            self.cal_px_per_step_x > 0 and 
-            self.cal_px_per_step_y > 0 and
-            'cal_step_x' in options and 
-            'cal_step_y' in options
-        )
-        
-        if self.calibration:
-            print(f"✓ Valid calibration loaded from options.json")
-            print(f"X: {self.cal_px_per_step_x:.3f} px/step, Y: {self.cal_px_per_step_y:.3f} px/step")
-        else:
-            print("⚠ No valid calibration found - calibration required before sequence")
         
         # Default spectrum range variables
         self.xmin_var = StringVar(value=options.get('xmin', '0'))
@@ -972,7 +962,6 @@ class SpektrometerApp(CustomTk):
         # Essential controls only
         CButton(control_frame, text="Start Camera", command=lambda: self.start_camera()).pack(side=LEFT, padx=5)
         CButton(control_frame, text="Stop Camera", command=lambda: self.stop_camera()).pack(side=LEFT, padx=5)
-        CButton(control_frame, text="Calibrate", command=self.start_calibration_both).pack(side=LEFT, padx=10)
         
         # Add Start Sequence button (needed for state management)
         self.start_seq_btn = CButton(control_frame, text="Start Sequence", command=self.start_measurement_sequence)
@@ -1298,14 +1287,15 @@ class SpektrometerApp(CustomTk):
                     
                     if new_w > 0 and new_h > 0:
                         # Use PIL for better quality resize
-                        pil_image = Image.fromarray(frame.copy())
-                        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                        
-                        # Convert to PhotoImage
-                        photo = ImageTk.PhotoImage(pil_image)
-                        
-                        # Clear canvas and update image
-                        self.spectrum_image_canvas.delete("all")
+                        if frame is not None:
+                            pil_image = Image.fromarray(frame.copy())
+                            pil_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                            
+                            # Convert to PhotoImage
+                            photo = ImageTk.PhotoImage(pil_image)
+                            
+                            # Clear canvas and update image
+                            self.spectrum_image_canvas.delete("all")
                         
                         # Center image on canvas
                         x_offset = (canvas_w - new_w) // 2
@@ -1321,11 +1311,13 @@ class SpektrometerApp(CustomTk):
                         self.spectrum_image_canvas_image = photo
                         
                         # Store current frame data for other functions
-                        self.pixelink_image_data = frame.copy()
+                        if frame is not None:
+                            self.pixelink_image_data = frame.copy()
                         
                         # AUTOMATIC SPECTRUM CALCULATION - only if enabled
                         if hasattr(self, 'auto_spectrum_var') and self.auto_spectrum_var.get():
-                            self._calculate_spectrum_from_frame(frame)
+                            if frame is not None:
+                                self._calculate_spectrum_from_frame(frame)
                     
                     # Update status
                     self.pixelink_status.configure(text="🟢 Live", fg='lightgreen')
@@ -1416,42 +1408,14 @@ class SpektrometerApp(CustomTk):
 
     def _update_start_seq_state(self):
         try:
-            # Check conditions - calibration must be completed and not in progress
-            cal_status = getattr(self, 'calibration', False)
-            cal_in_progress = getattr(self, '_calibration_mode', None) is not None
-            
-            # Enable only if calibrated AND not currently calibrating
-            enabled = bool(cal_status and not cal_in_progress)
-            
+            # Sequence button is always enabled (no calibration required)
             if hasattr(self, 'start_seq_btn'):
-                old_state = str(self.start_seq_btn.cget('state'))
-                self.start_seq_btn.configure(state=NORMAL if enabled else DISABLED)
-                
-                # Update button appearance and text based on state
-                if enabled:
-                    self.start_seq_btn.configure(
-                        text="START SEQUENCE", 
-                        bg='#28a745',  # Green background when enabled
-                        fg='white'
-                    )
-                    # Print message when sequence button becomes enabled
-                    if old_state == 'disabled':
-                        print("SEQUENCE BUTTON UNLOCKED - Ready to start measurements!")
-                        print("Click 'START SEQUENCE' to begin automatic scanning")
-                else:
-                    # Determine why it's disabled
-                    if cal_in_progress:
-                        button_text = "Start Sequence (calibrating...)"
-                    elif not cal_status:
-                        button_text = "Start Sequence (no calibration)"
-                    else:
-                        button_text = "Start Sequence (disabled)"
-                        
-                    self.start_seq_btn.configure(
-                        text=button_text, 
-                        bg='#6c757d',  # Gray background when disabled
-                        fg='lightgray'
-                    )
+                self.start_seq_btn.configure(
+                    state=NORMAL,
+                    text="START SEQUENCE", 
+                    bg='#28a745',  # Green background when enabled
+                    fg='white'
+                )
         except Exception as e:
             print(f"Error updating button state: {e}")
 
@@ -1518,18 +1482,18 @@ class SpektrometerApp(CustomTk):
         Label(settings_frame, text="Movement Settings", font=("Arial", 14, "bold"), 
               bg=self.DGRAY, fg='white').grid(row=0, column=0, columnspan=2, pady=10)
         
-        # Variables for settings
-        self.step_x = IntVar(value=options.get('step_x', 10))
-        self.step_y = IntVar(value=options.get('step_y', 10))
-        self.scan_width = IntVar(value=options.get('width', 100))
-        self.scan_height = IntVar(value=options.get('height', 100))
+        # Variables for settings (values in micrometers)
+        self.step_x = IntVar(value=options.get('step_x', 20))
+        self.step_y = IntVar(value=options.get('step_y', 20))
+        self.scan_width = IntVar(value=options.get('width', 200))
+        self.scan_height = IntVar(value=options.get('height', 200))
         
         # Settings entries
         settings_data = [
-            ("Step X:", self.step_x),
-            ("Step Y:", self.step_y),
-            ("Scan Width:", self.scan_width),
-            ("Scan Height:", self.scan_height),
+            ("Step X (μm):", self.step_x),
+            ("Step Y (μm):", self.step_y),
+            ("Scan Width (μm):", self.scan_width),
+            ("Scan Height (μm):", self.scan_height),
         ]
         
         for i, (label, var) in enumerate(settings_data, 1):
@@ -1583,21 +1547,8 @@ class SpektrometerApp(CustomTk):
         self.camera_combo.grid(row=cam_row+1, column=1, sticky=EW, pady=5)
         CButton(settings_frame, text="Refresh", command=lambda: print("Camera refresh disabled")).grid(row=cam_row+1, column=2, padx=10)
         
-        # Calibration settings
-        calib_row = cam_row + 2
-        Label(settings_frame, text="Calibration (px/step)", font=("Arial", 14, "bold"), 
-              bg=self.DGRAY, fg='white').grid(row=calib_row, column=0, columnspan=3, pady=10, sticky=W)
-        
-        Label(settings_frame, text="X:", bg=self.DGRAY, fg='white').grid(row=calib_row+1, column=0, sticky=W, pady=5)
-        self.cal_x_var = DoubleVar(value=self.cal_px_per_step_x)
-        Entry(settings_frame, textvariable=self.cal_x_var, bg=self.RGRAY, fg='white').grid(row=calib_row+1, column=1, sticky=EW, pady=5)
-        
-        Label(settings_frame, text="Y:", bg=self.DGRAY, fg='white').grid(row=calib_row+2, column=0, sticky=W, pady=5)
-        self.cal_y_var = DoubleVar(value=self.cal_px_per_step_y)
-        Entry(settings_frame, textvariable=self.cal_y_var, bg=self.RGRAY, fg='white').grid(row=calib_row+2, column=1, sticky=EW, pady=5)
-
         # Wavelength calibration settings
-        wave_row = calib_row + 3
+        wave_row = cam_row + 2
         Label(settings_frame, text="Wavelength Calibration", font=("Arial", 14, "bold"), 
               bg=self.DGRAY, fg='white').grid(row=wave_row, column=0, columnspan=3, pady=10, sticky=W)
         
@@ -1665,29 +1616,6 @@ class SpektrometerApp(CustomTk):
             print(f"Ports refreshed: {ports}")
         except Exception as e:
             print(f"Ports refresh error: {e}")
-
-    def save_calibration(self):
-        try:
-            self.cal_px_per_step_x = float(self.cal_x_var.get())
-            self.cal_px_per_step_y = float(self.cal_y_var.get())
-            options['cal_px_per_step_x'] = self.cal_px_per_step_x
-            options['cal_px_per_step_y'] = self.cal_px_per_step_y
-            options['cal_sign_x'] = int(getattr(self, 'cal_sign_x', 1))
-            options['cal_sign_y'] = int(getattr(self, 'cal_sign_y', 1))
-            # Keep existing cal_step values (from options/settings)
-            options['cal_step_x'] = int(options.get('cal_step_x', 1))
-            options['cal_step_y'] = int(options.get('cal_step_y', 1))
-            with open('options.json', 'w') as f:
-                json.dump(options, f, indent=4)
-            
-            # Set calibration flag based on saved values
-            self.calibration = bool(self.cal_px_per_step_x > 0 and self.cal_px_per_step_y > 0)
-            
-            print(f"Calibration saved: X={self.cal_px_per_step_x:.4f}, Y={self.cal_px_per_step_y:.4f}")
-            if self.calibration:
-                print("✓ Calibration flag set - sequence ready to start!")
-        except Exception as e:
-            print(f"Calibration save error: {e}")
 
     def _on_auto_spectrum_changed(self):
         """Handle auto spectrum calculation checkbox change"""
@@ -2106,27 +2034,28 @@ class SpektrometerApp(CustomTk):
                 
                 print("🚀 STARTING MEASUREMENT SEQUENCE...")
                 
-                # Guards: require calibration
-                if not getattr(self, 'calibration', False):
-                    print("❌ ERROR: Calibration required. Perform calibration in Camera & Controls tab.")
-                    return
-                
                 # Check motor connection
-                if not self.motor_controller.connected:
-                    print("ERROR: Motors are not connected!")
-                    print("Check serial port connections in Settings tab.")
-                    return
+                motor_connected = self.motor_controller.connected if hasattr(self, 'motor_controller') else False
+                if not motor_connected:
+                    print("⚠️  WARNING: Motors are not connected!")
+                    print("   This might be due to permission issues or ports being in use.")
+                    print("   Sequence will run in SIMULATION MODE (no actual movement).")
+                    print("   To fix: Close other applications using COM ports or run as administrator.")
+                    # Don't return - allow sequence to continue in simulation mode
                     
-                # Check camera/spectrometer connection  
+                # Check camera/spectrometer connection
                 camera_connected = False
-                if hasattr(self, 'camera_manager') and self.camera_manager:
+                has_camera_manager = hasattr(self, 'camera_manager') and self.camera_manager
+                has_pixelink_data = hasattr(self, 'pixelink_image_data')
+                
+                if has_camera_manager:
                     try:
                         camera_connected = (self.camera_manager.detector is not None and 
                                           self.camera_manager.detector.isOpened())
-                    except:
+                    except Exception:
                         camera_connected = False
                 
-                if not camera_connected and not hasattr(self, 'pixelink_image_data'):
+                if not camera_connected and not has_pixelink_data:
                     print("ERROR: Camera/spectrometer is not connected!")
                     print("Check device connection.")
                     return
@@ -2154,7 +2083,7 @@ class SpektrometerApp(CustomTk):
                 total_points = nx * ny
                 
                 print(f"📐 Scan area: {w}x{h} px, starting from ({x}, {y})")
-                print(f"📊 Krok skanowania: {step_x}x{step_y} px")
+                print(f"📊 Krok skanowania: {step_x}x{step_y} μm")
                 print(f"🎯 Scan points: {nx} x {ny} = {total_points} points")
                 
                 # Initialize progress tracking
@@ -2192,13 +2121,23 @@ class SpektrometerApp(CustomTk):
                     time.sleep(1)
                     current_point = 0
                     
-                    # Main scanning loop - square grid from corner
+                    # Main scanning loop - snake pattern (S-shaped)
                     for iy in range(points_y):
                         # Check for stop request
                         if self._sequence_stop_requested:
                             break
+                        
+                        # Determine scan direction for current row
+                        # Even rows (0, 2, 4...): left to right
+                        # Odd rows (1, 3, 5...): right to left
+                        if iy % 2 == 0:
+                            # Even row: scan left to right
+                            x_range = range(points_x)
+                        else:
+                            # Odd row: scan right to left
+                            x_range = range(points_x - 1, -1, -1)
                             
-                        for ix in range(points_x):
+                        for ix in x_range:
                             # Check for stop request
                             if self._sequence_stop_requested:
                                 break
@@ -2212,12 +2151,17 @@ class SpektrometerApp(CustomTk):
                             # Move to grid position (only if not the first point)
                             if current_point > 1:
                                 # Calculate movement needed from previous point
-                                if ix == 0 and iy > 0:  # New row, move down and reset X
+                                if iy > 0 and ((iy % 2 == 0 and ix == 0) or (iy % 2 == 1 and ix == points_x - 1)):
+                                    # Moving to the first point of a new row
                                     self.motor_controller.move('d', scan_step_y)
-                                    if (points_x - 1) * scan_step_x > 0:  # Move back to start of row
-                                        self.motor_controller.move('l', (points_x - 1) * scan_step_x)
-                                elif ix > 0:  # Same row, move right
-                                    self.motor_controller.move('r', scan_step_x)
+                                else:
+                                    # Moving within the same row
+                                    if iy % 2 == 0:
+                                        # Even row: moving right
+                                        self.motor_controller.move('r', scan_step_x)
+                                    else:
+                                        # Odd row: moving left
+                                        self.motor_controller.move('l', scan_step_x)
                             
                             # Wait for motor to stabilize
                             time.sleep(0.01)
@@ -2243,7 +2187,12 @@ class SpektrometerApp(CustomTk):
                                 spectrum = spectrum_profile
                             else:
                                 # Fallback to stored spectrum data
-                                spectrum = self.spectrum_data.copy()
+                                if hasattr(self, 'spectrum_data') and self.spectrum_data is not None:
+                                    spectrum = self.spectrum_data.copy()
+                                else:
+                                    # Generate dummy spectrum if no data available
+                                    print("⚠️  Warning: No spectrum data available, using dummy data")
+                                    spectrum = np.zeros(2048)
                             
                             # For sequence measurements, save FULL spectrum (all 2048 points)
                             # Don't use ROI settings - save complete spectrum data
@@ -2257,7 +2206,7 @@ class SpektrometerApp(CustomTk):
                             eta = (elapsed / current_point * (total_points - current_point)) if current_point > 0 else 0
                             
                             print(f"📊 Punkt {current_point}/{total_points} ({progress:.1f}%) - "
-                                  f"Siatka: ({grid_x}, {grid_y}) - ETA: {eta:.0f}s")
+                                  f"Siatka: ({grid_x}, {grid_y}) μm - ETA: {eta:.0f}s")
                             
                             # Smart delay based on camera frame rate and exposure time
                             # Get current exposure time from UI or options
@@ -2282,11 +2231,19 @@ class SpektrometerApp(CustomTk):
                 # Return to original position (before scan started)
                 print("🔙 Returning to position before scan...")
                 
-                # First move back to corner (where we started scanning)
-                final_grid_x = (points_x - 1) * scan_step_x
-                final_grid_y = (points_y - 1) * scan_step_y
+                # Calculate final position based on snake pattern
+                final_row = points_y - 1
                 
-                # Move from final position back to corner
+                if final_row % 2 == 0:
+                    # Last row was even (left to right), so we end at rightmost position
+                    final_grid_x = (points_x - 1) * scan_step_x
+                else:
+                    # Last row was odd (right to left), so we end at leftmost position
+                    final_grid_x = 0
+                    
+                final_grid_y = final_row * scan_step_y
+                
+                # Move from final position back to corner (0,0)
                 if final_grid_x > 0:
                     self.motor_controller.move('l', final_grid_x)
                 if final_grid_y > 0:
@@ -2333,25 +2290,41 @@ class SpektrometerApp(CustomTk):
         
         print("🔧 Applying settings...")
         
+        # Validate step values (minimum 2 micrometers)
+        step_x = max(2, self.step_x.get())  # Minimum 2 μm (1 pulse)
+        step_y = max(2, self.step_y.get())  # Minimum 2 μm (1 pulse)
+        scan_width = max(2, self.scan_width.get())  # Minimum 2 μm
+        scan_height = max(2, self.scan_height.get())  # Minimum 2 μm
+        
+        # Update UI if values were corrected
+        if step_x != self.step_x.get():
+            self.step_x.set(step_x)
+            print(f"⚠️  Step X corrected to minimum value: {step_x} μm")
+        if step_y != self.step_y.get():
+            self.step_y.set(step_y)
+            print(f"⚠️  Step Y corrected to minimum value: {step_y} μm")
+        if scan_width != self.scan_width.get():
+            self.scan_width.set(scan_width)
+            print(f"⚠️  Scan Width corrected to minimum value: {scan_width} μm")
+        if scan_height != self.scan_height.get():
+            self.scan_height.set(scan_height)
+            print(f"⚠️  Scan Height corrected to minimum value: {scan_height} μm")
+        
         # Debug current values
         print(f"🔍 Current port values: X='{self.port_x_var.get()}', Y='{self.port_y_var.get()}'")
-        print(f"🔍 Current step values: X={self.step_x.get()}, Y={self.step_y.get()}")
+        print(f"🔍 Current step values: X={step_x} μm, Y={step_y} μm")
         
         settings = {
-            'step_x': self.step_x.get(),
-            'step_y': self.step_y.get(),
-            'width': self.scan_width.get(),
-            'height': self.scan_height.get(),
+            'step_x': step_x,
+            'step_y': step_y,
+            'width': scan_width,
+            'height': scan_height,
             'xmin': self.xmin_var.get(),
             'xmax': self.xmax_var.get(),
             'port_x': self.port_x_var.get(),
             'port_y': self.port_y_var.get(),
             'sequence_sleep': self.sequence_sleep_var.get() if hasattr(self, 'sequence_sleep_var') else options.get('sequence_sleep', 0.1),
             'camera_index': int(self.camera_combo.get()) if hasattr(self, 'camera_combo') and self.camera_combo.get() != '' else options.get('camera_index', 0),
-            'cal_px_per_step_x': float(self.cal_x_var.get()) if hasattr(self, 'cal_x_var') else options.get('cal_px_per_step_x', 0.0),
-            'cal_px_per_step_y': float(self.cal_y_var.get()) if hasattr(self, 'cal_y_var') else options.get('cal_px_per_step_y', 0.0),
-            'cal_sign_x': int(getattr(self, 'cal_sign_x', options.get('cal_sign_x', 1))),
-            'cal_sign_y': int(getattr(self, 'cal_sign_y', options.get('cal_sign_y', 1))),
             'lambda_min': float(self.lambda_min_var.get()) if hasattr(self, 'lambda_min_var') else options.get('lambda_min', 400.0),
             'lambda_max': float(self.lambda_max_var.get()) if hasattr(self, 'lambda_max_var') else options.get('lambda_max', 700.0),
             'lambda_calibration_enabled': bool(self.lambda_cal_enabled_var.get()) if hasattr(self, 'lambda_cal_enabled_var') else options.get('lambda_calibration_enabled', True),
@@ -2388,16 +2361,14 @@ class SpektrometerApp(CustomTk):
             print(f"Settings save error: {e}")
 
     def start_calibration(self, axis):
-        # This simple manual calibration will store two clicks before/after a known step
-        # User flow: Click center on image, press move in axis, click center again, we compute px/step
-        if axis not in ('x', 'y'):
-            return
-        self._calibration_mode = f"{axis}_before"
-        print(f"Kalibracja {axis.upper()} — kliknij punkt referencyjny na obrazie.")
-        # Canvas display was removed - calibration disabled
-        print("Canvas display removed - manual calibration unavailable")
+        print("⚠️  CALIBRATION TEMPORARILY DISABLED")
+        print("   Calibration features have been removed for now")
+        return
 
     def start_calibration_both(self):
+        print("⚠️  AUTO-CALIBRATION TEMPORARILY DISABLED")
+        print("   Auto-calibration features have been removed for now")
+        return
         try:
             # Check motor connection first
             if not self.motor_controller.connected:
@@ -2419,6 +2390,12 @@ class SpektrometerApp(CustomTk):
                 print("ERROR: Camera is not connected and no test image available!")
                 print("Check camera connection or use test image.")
                 return
+            
+            # Additional check: ensure pixelink_image_data is not None
+            if hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is None:
+                print("ERROR: No valid image data available from camera/spectrometer!")
+                print("Wait for camera to provide image data before starting calibration.")
+                return
                 
             print("Automatic calibration: performing X and Y movements, analyzing image changes...")
             # Clear previous calibration data
@@ -2438,6 +2415,13 @@ class SpektrometerApp(CustomTk):
     def _auto_calibration_sequence(self):
         """Automatic calibration: move motors, analyze image changes"""
         try:
+            # Check if we have valid image data
+            if not hasattr(self, 'pixelink_image_data') or self.pixelink_image_data is None:
+                print("❌ Auto calibration failed: No image data available from camera/spectrometer")
+                print("   Make sure camera is connected and providing image data")
+                self._calibration_mode = None
+                return
+            
             if self._calibration_mode == 'auto_running':
                 # Step 1: Capture reference image
                 print("Step 1: Saving reference image...")
@@ -2454,6 +2438,12 @@ class SpektrometerApp(CustomTk):
             elif self._calibration_mode == 'wait_x':
                 # Step 3: Capture image after X movement
                 print("Step 3: Analyzing change after X movement...")
+                # Check again for valid data
+                if self.pixelink_image_data is None:
+                    print("❌ Auto calibration failed: Lost image data after X movement")
+                    self._calibration_mode = None
+                    return
+                    
                 self._cal_images['after_x'] = self.pixelink_image_data.copy()
                 
                 # Analyze X displacement
@@ -2470,6 +2460,12 @@ class SpektrometerApp(CustomTk):
             elif self._calibration_mode == 'wait_y':
                 # Step 5: Capture image after Y movement and finalize
                 print("Step 5: Analyzing change after Y movement...")
+                # Check again for valid data
+                if self.pixelink_image_data is None:
+                    print("❌ Auto calibration failed: Lost image data after Y movement")
+                    self._calibration_mode = None
+                    return
+                    
                 self._cal_images['after_y'] = self.pixelink_image_data.copy()
                 
                 # Analyze Y displacement
@@ -2484,111 +2480,21 @@ class SpektrometerApp(CustomTk):
     
     def _analyze_x_displacement(self):
         """Analyze image displacement in X direction"""
-        try:
-            ref_img = self._cal_images['reference']
-            after_img = self._cal_images['after_x']
-            
-            # Use optical flow or correlation to find displacement
-            # Simplified: compare image centers
-            h, w = ref_img.shape[:2]
-            center_h = h // 2
-            roi_height = min(50, h // 4)
-            
-            ref_strip = ref_img[center_h-roi_height:center_h+roi_height, :]
-            after_strip = after_img[center_h-roi_height:center_h+roi_height, :]
-            
-            # Cross-correlation to find shift
-            correlation = cv2.matchTemplate(after_strip.astype(np.float32), 
-                                          ref_strip.astype(np.float32), 
-                                          cv2.TM_CCOEFF_NORMED)
-            _, _, _, max_loc = cv2.minMaxLoc(correlation)
-            
-            # Calculate displacement in pixels
-            displacement_x = max_loc[0] - (w // 2)
-            steps = max(1, int(options.get('cal_step_x', 1)))
-            
-            if abs(displacement_x) > 0.1:  # Minimum detectable movement
-                self.cal_px_per_step_x = abs(displacement_x) / steps
-                self.cal_sign_x = 1 if displacement_x > 0 else -1
-                print(f"X calibration: {displacement_x:.1f}px displacement, {self.cal_px_per_step_x:.3f} px/step")
-            else:
-                print("X: No image displacement detected")
-                
-        except Exception as e:
-            print(f"X analysis error: {e}")
+        print("ⓘ X displacement analysis disabled - calibration features removed")
     
     def _analyze_y_displacement(self):
         """Analyze image displacement in Y direction"""
-        try:
-            ref_img = self._cal_images['after_x']  # Use after X as reference for Y
-            after_img = self._cal_images['after_y']
-            
-            h, w = ref_img.shape[:2]
-            center_w = w // 2
-            roi_width = min(50, w // 4)
-            
-            ref_strip = ref_img[:, center_w-roi_width:center_w+roi_width]
-            after_strip = after_img[:, center_w-roi_width:center_w+roi_width]
-            
-            # Cross-correlation to find shift
-            correlation = cv2.matchTemplate(after_strip.astype(np.float32), 
-                                          ref_strip.astype(np.float32), 
-                                          cv2.TM_CCOEFF_NORMED)
-            _, _, _, max_loc = cv2.minMaxLoc(correlation)
-            
-            # Calculate displacement in pixels
-            displacement_y = max_loc[1] - (h // 2)
-            steps = max(1, int(options.get('cal_step_y', 1)))
-            
-            if abs(displacement_y) > 0.1:  # Minimum detectable movement
-                self.cal_px_per_step_y = abs(displacement_y) / steps
-                self.cal_sign_y = 1 if displacement_y > 0 else -1
-                print(f"Y calibration: {displacement_y:.1f}px displacement, {self.cal_px_per_step_y:.3f} px/step")
-            else:
-                print("Y: No image displacement detected")
-                
-        except Exception as e:
-            print(f"Y analysis error: {e}")
+        print("ⓘ Y displacement analysis disabled - calibration features removed")
     
     def _finalize_auto_calibration(self):
         """Complete automatic calibration"""
-        try:
-            # Update calibration displays
-            if hasattr(self, 'cal_x_var'):
-                self.cal_x_var.set(self.cal_px_per_step_x)
-            if hasattr(self, 'cal_y_var'):
-                self.cal_y_var.set(self.cal_px_per_step_y)
-            
-            # Set calibration complete
-            self.calibration = bool(self.cal_px_per_step_x > 0 and self.cal_px_per_step_y > 0)
-            
-            if self.calibration:
-                print("✓ Automatic calibration completed successfully!")
-                print(f"X: {self.cal_px_per_step_x:.3f} px/step, sign: {self.cal_sign_x}")
-                print(f"Y: {self.cal_px_per_step_y:.3f} px/step, sign: {self.cal_sign_y}")
-                print("✓ Ready to start measurement sequence")
-                
-                # Auto-save calibration
-                self.save_calibration()
-                
-                # Generate and store scan points for visualization
-                self.scan_points = self.generate_scan_points()
-                print(f"✓ Generated {len(self.scan_points)} scan points")
-                print("✓ Scanning will be performed on the entire image surface")
-                
-            else:
-                print("ERROR: Calibration failed - no image movement detected")
-            
-            # Update UI states
-            self._update_start_seq_state()
-            self._calibration_mode = None
-            
-        except Exception as e:
-            print(f"Finalization error: {e}")
-            self._calibration_mode = None
+        print("ⓘ Auto calibration finalization disabled - calibration features removed")
+        # Update UI states
+        self._update_start_seq_state()
+        self._calibration_mode = None
     
     def generate_scan_points(self):
-        """Generate scan points based on full image and step settings"""
+        """Generate scan points based on full image and step settings using snake pattern"""
         # Use full image dimensions
         if hasattr(self, 'pixelink_image_data') and self.pixelink_image_data is not None:
             h, w = self.pixelink_image_data.shape[:2]
@@ -2607,64 +2513,30 @@ class SpektrometerApp(CustomTk):
         
         points = []
         
-        # Generate points using the same raster pattern as scanning sequence
+        # Generate points using snake pattern (S-shaped scanning)
         for iy in range(ny):
-            for ix in range(nx):
-                # Calculate pixel positions (same formula as scanning)
+            # Determine scan direction for current row
+            if iy % 2 == 0:
+                # Even row: left to right
+                x_range = range(nx)
+            else:
+                # Odd row: right to left
+                x_range = range(nx - 1, -1, -1)
+                
+            for ix in x_range:
+                # Calculate pixel positions
                 pixel_x = x + (ix * step_x)
                 pixel_y = y + (iy * step_y)
                 points.append((pixel_x, pixel_y))
         
-        print(f"🎯 Generated {len(points)} scan points ({nx}x{ny} grid)")
+        print(f"🎯 Generated {len(points)} scan points ({nx}x{ny} grid) using snake pattern")
         return points
         
     def reset_calibration(self):
-        self.cal_px_per_step_x = 0.0
-        self.cal_px_per_step_y = 0.0
-        if hasattr(self, 'cal_x_var'):
-            self.cal_x_var.set(0.0)
-        if hasattr(self, 'cal_y_var'):
-            self.cal_y_var.set(0.0)
-        # Remove calibration markers
-        try:
-            for k, (pt, lbl) in list(self._cal_markers.items()):
-                try:
-                    pt.remove()
-                except Exception:
-                    pass
-                try:
-                    lbl.remove()
-                except Exception:
-                    pass
-                self._cal_markers.pop(k, None)
-            # Canvas display was removed - skip drawing
-            pass
-        except Exception:
-            pass
-        print("Calibration reset.")
+        print("ⓘ Calibration reset disabled - calibration features removed")
 
     def _add_cal_marker(self, key, x, y, color, label):
-        # Remove existing marker for this key
-        try:
-            if key in self._cal_markers:
-                old_pt, old_lbl = self._cal_markers[key]
-                try:
-                    old_pt.remove()
-                except Exception:
-                    pass
-                try:
-                    old_lbl.remove()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # Add new marker and label
-        # Canvas display was removed - skip marker display
-        print(f"Calibration marker {label} at ({x}, {y}) - display disabled")
-        try:
-            pass  # Canvas drawing disabled
-        except Exception:
-            pass
+        print(f"ⓘ Calibration marker {label} disabled - calibration features removed")
     
     def load_measurements(self):
         """Load measurement files list without caching data"""
